@@ -24,6 +24,20 @@ from app.api.v1.settings import (
 from app.api.v1.search import (
     router as search_router,
 )
+from app.api.v1.fee_export import (
+    router as fee_export_router,
+)
+from app.api.v1.reports import (
+    router as reports_router,
+)
+from app.api.v1.report_exports import (
+    router as report_exports_router,
+)
+
+from app.api.v1.student_import import (
+    router as student_import_router,
+)
+
 
 app = FastAPI(
     title="Skating Academy API",
@@ -34,7 +48,7 @@ app = FastAPI(
 @app.get("/")
 def root():
     return {
-        "message": "Skating Academy Backend Running 🚀",
+        "message": "Skating Academy Backend Running ",
         "algorithm": settings.ALGORITHM,
     }
 
@@ -87,7 +101,10 @@ app.include_router(
     fees_router,
     prefix="/api/v1",
 )
-
+app.include_router(
+    fee_export_router,
+    prefix="/api/v1",
+)
 
 app.include_router(
     dashboard_router,
@@ -108,5 +125,21 @@ app.include_router(
 
 app.include_router(
     search_router,
+    prefix="/api/v1",
+)
+
+
+app.include_router(
+    reports_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    report_exports_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    student_import_router,
     prefix="/api/v1",
 )
