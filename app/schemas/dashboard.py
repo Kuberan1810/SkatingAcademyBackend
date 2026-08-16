@@ -6,7 +6,9 @@ from pydantic import BaseModel
 # =========================================================
 
 class DashboardStudents(BaseModel):
+
     total: int
+
     new_this_month: int
 
 
@@ -15,8 +17,11 @@ class DashboardStudents(BaseModel):
 # =========================================================
 
 class DashboardAttendance(BaseModel):
+
     present_today: int
+
     total_expected: int
+
     percentage: float
 
 
@@ -25,7 +30,9 @@ class DashboardAttendance(BaseModel):
 # =========================================================
 
 class DashboardFees(BaseModel):
+
     pending_amount: int
+
     students_due: int
 
 
@@ -34,7 +41,9 @@ class DashboardFees(BaseModel):
 # =========================================================
 
 class DashboardRevenue(BaseModel):
+
     total: int
+
     change_percentage: float
 
 
@@ -43,8 +52,11 @@ class DashboardRevenue(BaseModel):
 # =========================================================
 
 class DashboardTodaySessions(BaseModel):
+
     scheduled: int
+
     completed: int
+
     total_active_sessions: int
 
 
@@ -77,20 +89,30 @@ class UpcomingSessionItem(BaseModel):
 
     id: str
 
-    title: str
+    batch_id: int
+
+    batch_name: str
+
+    class_type: str
+
+    location: str
+
+    date: str
+
+    day: str
+
+    start_time: str
+
+    end_time: str
 
     time: str
 
-    students_count: str
-
-    status: str
-
-    time_of_day: str
+    students_count: int
 
 
 class UpcomingSessions(BaseModel):
 
-    display_date: str
+    display_date: str | None
 
     sessions: list[UpcomingSessionItem]
 

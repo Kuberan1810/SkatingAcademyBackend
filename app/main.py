@@ -37,7 +37,7 @@ from app.api.v1.report_exports import (
 from app.api.v1.student_import import (
     router as student_import_router,
 )
-
+from app.api.v1.pending_fees import router as pending_fees_router
 
 app = FastAPI(
     title="Skating Academy API",
@@ -107,6 +107,11 @@ app.include_router(
 )
 
 app.include_router(
+    pending_fees_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
     dashboard_router,
     prefix="/api/v1",
 )
@@ -143,3 +148,5 @@ app.include_router(
     student_import_router,
     prefix="/api/v1",
 )
+
+

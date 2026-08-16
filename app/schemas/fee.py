@@ -1,5 +1,7 @@
 from pydantic import BaseModel, Field, field_validator
 
+from datetime import date
+
 VALID_PAYMENT_METHODS = {
     "CASH",
     "UPI",
@@ -161,3 +163,77 @@ class FeePageResponse(BaseModel):
     status: str
     message: str
     data: FeePageData
+
+
+
+
+
+# =========================================================
+# PENDING FEE STUDENT
+# =========================================================
+
+class PendingFeeStudent(BaseModel):
+    id: int
+
+    name: str
+
+    batch_id: int
+    batch_name: str
+
+    phone: str
+
+    avatar_uri: str | None = None
+
+    pending_amount: int
+
+    due_date: date
+
+    due_date_text: str
+
+    status: str
+
+# =========================================================
+# PENDING FEE COLLECTION
+# =========================================================
+
+class PendingFeeSummary(BaseModel):
+    total_pending_amount: int
+    total_students_count: int
+
+    overdue_amount: int
+    overdue_count: int
+
+    due_today_amount: int
+    due_today_count: int
+
+    upcoming_amount: int
+    upcoming_count: int
+
+
+class PendingFeeItem(BaseModel):
+    id: str
+
+    student_name: str
+    batch_name: str
+
+    due_date: str
+
+    amount: int
+
+    status: str
+
+    phone: str
+
+    avatar_uri: str | None = None
+
+
+class PendingFeeData(BaseModel):
+    summary: PendingFeeSummary
+
+    fees: list[PendingFeeItem]
+
+
+class PendingFeeCollectionResponse(BaseModel):
+    status: str
+    message: str
+    data: PendingFeeData
