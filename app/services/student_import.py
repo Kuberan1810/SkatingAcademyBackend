@@ -1,11 +1,22 @@
+from __future__ import annotations
+
+import csv
+import io
+import os
+import re
 from datetime import date, datetime
 from pathlib import Path
-import re
+from typing import Any
 
-from dateutil import parser as date_parser
-
-from openpyxl import load_workbook
 from docx import Document
+from openpyxl import load_workbook
+from PIL import Image, ImageOps
+import pytesseract
+
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
 
 from sqlalchemy.orm import Session
 
@@ -14,103 +25,139 @@ from app.models.student import Student
 
 
 # =========================================================
+# TESSERACT OCR
+# =========================================================
+
+TESSERACT_PATH = (
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+)
+
+if os.path.isfile(TESSERACT_PATH):
+    pytesseract.pytesseract.tesseract_cmd = (
+        TESSERACT_PATH
+    )
+
+# =========================================================
+# SUPPORTED FILE TYPES
+# =========================================================
+
+SUPPORTED_EXTENSIONS = {
+    ".xlsx",
+    ".csv",
+    ".docx",
+    ".txt",
+    ".pdf",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+}
+
+
+# =========================================================
 # FIELD ALIASES
 # =========================================================
 
 FIELD_ALIASES = {
 
-    "full_name": {
-        "full name",
-        "student name",
-        "name",
-        "student full name",
-    },
+    # Student
+    "full name": "full_name",
+    "fullname": "full_name",
+    "full_name": "full_name",
+    "name": "full_name",
+    "student name": "full_name",
+    "student_name": "full_name",
 
-    "dob": {
-        "dob",
-        "date of birth",
-        "birth date",
-        "birthdate",
-    },
+    # DOB
+    "dob": "dob",
+    "date of birth": "dob",
+    "dateofbirth": "dob",
+    "date_of_birth": "dob",
 
-    "gender": {
-        "gender",
-        "sex",
-    },
+    # Gender
+    "gender": "gender",
+    "sex": "gender",
 
-    "blood_group": {
-        "blood group",
-        "blood",
-        "blood type",
-    },
+    # Blood group
+    "blood group": "blood_group",
+    "bloodgroup": "blood_group",
+    "blood_group": "blood_group",
 
-    "batch": {
-        "batch",
-        "batch name",
-        "class",
-        "training batch",
-    },
+    # Batch ID
+    "batch id": "batch_id",
+    "batchid": "batch_id",
+    "batch_id": "batch_id",
 
-    "join_date": {
-        "join date",
-        "joining date",
-        "date joined",
-    },
+    # Batch name
+    "batch name": "batch_name",
+    "batchname": "batch_name",
+    "batch_name": "batch_name",
+    "batch": "batch_name",
 
-    "parent_name": {
-        "parent",
-        "parent name",
-        "father name",
-        "mother name",
-        "guardian name",
-    },
+    # Join date
+    "join date": "join_date",
+    "joindate": "join_date",
+    "join_date": "join_date",
 
-    "phone_number": {
-        "phone",
-        "phone number",
-        "mobile",
-        "mobile number",
-        "contact",
-    },
+    # Parent
+    "parent name": "parent_name",
+    "parentname": "parent_name",
+    "parent_name": "parent_name",
+    "guardian name": "parent_name",
 
-    "emergency_contact": {
-        "emergency",
-        "emergency contact",
-        "emergency phone",
-        "emergency number",
-    },
+    # Phone
+    "phone number": "phone_number",
+    "phonenumber": "phone_number",
+    "phone_number": "phone_number",
+    "phone": "phone_number",
+    "mobile": "phone_number",
 
-    "monthly_fee": {
-        "monthly fee",
-        "monthly fees",
-        "fee",
-        "fees",
-    },
+    # Emergency
+    "emergency contact": "emergency_contact",
+    "emergencycontact": "emergency_contact",
+    "emergency_contact": "emergency_contact",
+    "emergency phone": "emergency_contact",
 
-    "avatar_uri": {
-        "avatar",
-        "avatar uri",
-        "profile image",
-        "image",
-        "image url",
-    },
+    # Fee
+    "monthly fee": "monthly_fee",
+    "monthlyfee": "monthly_fee",
+    "monthly_fee": "monthly_fee",
+    "fee": "monthly_fee",
+
+    # Avatar
+    "avatar uri": "avatar_uri",
+    "avatar_uri": "avatar_uri",
+    "avatar": "avatar_uri",
 }
 
 
 # =========================================================
-# NORMALIZE TEXT
+# BASIC HELPERS
 # =========================================================
 
-def normalize_text(
-    value,
-) -> str:
+def clean_text(value: Any) -> str:
 
     if value is None:
         return ""
 
-    value = str(
+    return str(value).strip()
+
+
+def normalize_key(value: Any) -> str:
+
+    value = clean_text(
         value
-    ).strip().lower()
+    ).lower()
+
+    value = value.replace(
+        "_",
+        " ",
+    )
+
+    value = value.replace(
+        "-",
+        " ",
+    )
 
     value = re.sub(
         r"\s+",
@@ -118,35 +165,24 @@ def normalize_text(
         value,
     )
 
-    return value
+    return value.strip()
 
 
-# =========================================================
-# NORMALIZE HEADER
-# =========================================================
-
-def normalize_header(
-    header,
+def map_field_name(
+    value: Any,
 ) -> str | None:
 
-    normalized = normalize_text(
-        header
+    return FIELD_ALIASES.get(
+        normalize_key(value)
     )
 
-    for field_name, aliases in FIELD_ALIASES.items():
-
-        if normalized in aliases:
-            return field_name
-
-    return None
-
 
 # =========================================================
-# DATE PARSER
+# DATE
 # =========================================================
 
-def parse_date(
-    value,
+def parse_date_value(
+    value: Any,
 ) -> date | None:
 
     if value is None:
@@ -164,20 +200,20 @@ def parse_date(
     ):
         return value
 
-    value = str(
-        value
-    ).strip()
+    value = clean_text(value)
 
     if not value:
         return None
 
     formats = [
+        "%Y-%m-%d",
         "%d-%m-%Y",
         "%d/%m/%Y",
+        "%m/%d/%Y",
         "%d.%m.%Y",
-        "%Y-%m-%d",
-        "%d-%m-%y",
-        "%d/%m/%y",
+        "%Y/%m/%d",
+        "%d %b %Y",
+        "%d %B %Y",
     ]
 
     for fmt in formats:
@@ -190,556 +226,219 @@ def parse_date(
             ).date()
 
         except ValueError:
-            continue
+            pass
 
-    try:
-
-        return date_parser.parse(
-            value,
-            dayfirst=True,
-        ).date()
-
-    except Exception:
-        return None
+    return None
 
 
 # =========================================================
-# INTEGER PARSER
+# INTEGER
 # =========================================================
 
-def parse_integer(
-    value,
+def parse_int_value(
+    value: Any,
 ) -> int | None:
 
     if value is None:
         return None
 
-    if isinstance(
-        value,
-        int,
-    ):
-        return value
+    text = clean_text(value)
 
-    if isinstance(
-        value,
-        float,
-    ):
-        return int(value)
-
-    value = str(
-        value
-    ).strip()
-
-    if not value:
+    if not text:
         return None
 
-    value = re.sub(
+    text = re.sub(
         r"[₹,\s]",
         "",
-        value,
+        text,
     )
 
     try:
         return int(
-            float(value)
+            float(text)
         )
 
     except (
-        ValueError,
         TypeError,
+        ValueError,
     ):
         return None
 
 
 # =========================================================
-# PHONE NORMALIZER
+# PHONE
 # =========================================================
 
-def normalize_phone(
-    value,
-) -> str | None:
+def clean_phone(
+    value: Any,
+) -> str:
 
-    if value is None:
-        return None
-
-    value = str(
+    value = clean_text(
         value
-    ).strip()
+    )
 
-    if not value:
-        return None
-
-    # Keep only numbers
-    value = re.sub(
-        r"\D",
+    return re.sub(
+        r"[^\d+]",
         "",
         value,
     )
 
-    # Remove India country code
-    if value.startswith(
-        "91"
-    ) and len(value) == 12:
-
-        value = value[2:]
-
-    return value
-
 
 # =========================================================
-# EXCEL PARSER
-# =========================================================
-
-def parse_excel(
-    file_path: str,
-) -> list[dict]:
-
-    workbook = load_workbook(
-        file_path,
-        data_only=True,
-    )
-
-    worksheet = workbook.active
-
-    rows = list(
-        worksheet.iter_rows(
-            values_only=True
-        )
-    )
-
-    if not rows:
-        return []
-
-    headers = rows[0]
-
-    normalized_headers = []
-
-    for header in headers:
-
-        normalized_headers.append(
-            normalize_header(
-                header
-            )
-        )
-
-    records = []
-
-    for row_number, row in enumerate(
-        rows[1:],
-        start=2,
-    ):
-
-        # Skip completely empty rows
-
-        if not any(
-            value is not None
-            and str(value).strip()
-            for value in row
-        ):
-            continue
-
-        record = {
-            "row_number": row_number
-        }
-
-        for index, value in enumerate(
-            row
-        ):
-
-            if index >= len(
-                normalized_headers
-            ):
-                continue
-
-            field_name = (
-                normalized_headers[index]
-            )
-
-            if field_name is None:
-                continue
-
-            record[
-                field_name
-            ] = value
-
-        records.append(
-            record
-        )
-
-    return records
-
-
-# =========================================================
-# CSV PARSER
-# =========================================================
-
-def parse_csv(
-    file_path: str,
-) -> list[dict]:
-
-    import csv
-
-    records = []
-
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8-sig",
-        newline="",
-    ) as file:
-
-        reader = csv.DictReader(
-            file
-        )
-
-        for row_number, row in enumerate(
-            reader,
-            start=2,
-        ):
-
-            record = {
-                "row_number":
-                    row_number
-            }
-
-            for key, value in row.items():
-
-                field_name = (
-                    normalize_header(
-                        key
-                    )
-                )
-
-                if field_name:
-
-                    record[
-                        field_name
-                    ] = value
-
-            records.append(
-                record
-            )
-
-    return records
-
-
-# =========================================================
-# DOCX PARSER
-# =========================================================
-
-def parse_docx(
-    file_path: str,
-) -> list[dict]:
-
-    document = Document(
-        file_path
-    )
-
-    text_lines = []
-
-    for paragraph in (
-        document.paragraphs
-    ):
-
-        text = (
-            paragraph.text
-            .strip()
-        )
-
-        if text:
-            text_lines.append(
-                text
-            )
-
-    # ---------------------------------------------
-    # Check tables first
-    # ---------------------------------------------
-
-    records = []
-
-    for table in document.tables:
-
-        table_rows = []
-
-        for row in table.rows:
-
-            values = [
-                cell.text.strip()
-                for cell in row.cells
-            ]
-
-            table_rows.append(
-                values
-            )
-
-        if len(table_rows) < 2:
-            continue
-
-        headers = [
-            normalize_header(
-                header
-            )
-            for header in table_rows[0]
-        ]
-
-        for row_number, row in enumerate(
-            table_rows[1:],
-            start=2,
-        ):
-
-            record = {
-                "row_number":
-                    row_number
-            }
-
-            for index, value in enumerate(
-                row
-            ):
-
-                if index >= len(
-                    headers
-                ):
-                    continue
-
-                field_name = (
-                    headers[index]
-                )
-
-                if field_name:
-
-                    record[
-                        field_name
-                    ] = value
-
-            records.append(
-                record
-            )
-
-    if records:
-        return records
-
-    # ---------------------------------------------
-    # Key : Value document
-    # ---------------------------------------------
-
-    data = {}
-
-    for line in text_lines:
-
-        if ":" not in line:
-            continue
-
-        key, value = line.split(
-            ":",
-            1,
-        )
-
-        field_name = (
-            normalize_header(
-                key
-            )
-        )
-
-        if field_name:
-
-            data[
-                field_name
-            ] = value.strip()
-
-    if data:
-
-        return [
-            {
-                "row_number": 1,
-                **data,
-            }
-        ]
-
-    return []
-
-
-# =========================================================
-# TXT PARSER
-# =========================================================
-
-def parse_txt(
-    file_path: str,
-) -> list[dict]:
-
-    with open(
-        file_path,
-        "r",
-        encoding="utf-8-sig",
-    ) as file:
-
-        text = file.read()
-
-    data = {}
-
-    for line in text.splitlines():
-
-        line = line.strip()
-
-        if not line:
-            continue
-
-        if ":" not in line:
-            continue
-
-        key, value = line.split(
-            ":",
-            1,
-        )
-
-        field_name = (
-            normalize_header(
-                key
-            )
-        )
-
-        if field_name:
-
-            data[
-                field_name
-            ] = value.strip()
-
-    if not data:
-        return []
-
-    return [
-        {
-            "row_number": 1,
-            **data,
-        }
-    ]
-
-
-# =========================================================
-# FILE DISPATCHER
-# =========================================================
-
-def parse_file(
-    file_path: str,
-):
-
-    extension = (
-        Path(file_path)
-        .suffix
-        .lower()
-    )
-
-    if extension == ".xlsx":
-
-        return parse_excel(
-            file_path
-        )
-
-    if extension == ".csv":
-
-        return parse_csv(
-            file_path
-        )
-
-    if extension == ".docx":
-
-        return parse_docx(
-            file_path
-        )
-
-    if extension == ".txt":
-
-        return parse_txt(
-            file_path
-        )
-
-    raise ValueError(
-        "Unsupported file type. "
-        "Use XLSX, CSV, DOCX or TXT."
-    )
-
-
-# =========================================================
-# BATCH MATCHING
+# FIND BATCH
 # =========================================================
 
 def find_batch(
     db: Session,
-    batch_id: int | None = None,
+    batch_id: int | str | None = None,
     batch_name: str | None = None,
-):
-    # 1. Batch ID is the primary lookup
-    if batch_id is not None:
+) -> Batch | None:
+
+    # -----------------------------------------------------
+    # 1. BATCH ID
+    # -----------------------------------------------------
+
+    normalized_batch_id = None
+
+    if batch_id not in (
+        None,
+        "",
+    ):
+
+        try:
+
+            normalized_batch_id = int(
+                float(
+                    str(
+                        batch_id
+                    ).strip()
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            normalized_batch_id = None
+
+    # -----------------------------------------------------
+    # IMPORTANT
+    #
+    # ONLY INTEGER goes into Batch.id
+    #
+    # Never:
+    # Batch.id == "Sunday batch"
+    # -----------------------------------------------------
+
+    if (
+        normalized_batch_id
+        is not None
+    ):
+
         batch = (
             db.query(Batch)
             .filter(
-                Batch.id == batch_id,
+                Batch.id
+                == normalized_batch_id,
+
                 Batch.is_active.is_(True),
             )
             .first()
         )
 
-        if batch:
+        if batch is not None:
             return batch
 
-    # 2. Fallback to batch name
+    # -----------------------------------------------------
+    # 2. BATCH NAME
+    # -----------------------------------------------------
+
     if batch_name:
-        batch = (
-            db.query(Batch)
-            .filter(
-                Batch.batch_name == batch_name,
-                Batch.is_active.is_(True),
-            )
-            .first()
+
+        name = clean_text(
+            batch_name
         )
 
-        if batch:
-            return batch
+        if name:
+
+            batch = (
+                db.query(Batch)
+                .filter(
+                    Batch.batch_name.ilike(
+                        name
+                    ),
+
+                    Batch.is_active.is_(True),
+                )
+                .first()
+            )
+
+            if batch is not None:
+                return batch
 
     return None
 
 
 # =========================================================
-# DUPLICATE CHECK
+# BATCH VALUE FIX
 # =========================================================
 
-def find_duplicate_student(
-    db: Session,
-    phone_number: str | None,
-    full_name: str | None,
-    dob: date | None,
+def fix_batch_values(
+    batch_id: Any,
+    batch_name: Any,
 ):
 
-    if phone_number:
+    batch_id = clean_text(
+        batch_id
+    )
 
-        existing = (
-            db.query(Student)
-            .filter(
-                Student.phone_number
-                == phone_number
-            )
-            .first()
+    batch_name = clean_text(
+        batch_name
+    )
+
+    # Expected:
+    #
+    # batch_id   = 9
+    # batch_name = Sunday batch
+    #
+    # Possible bad parser:
+    #
+    # batch_id   = Sunday batch
+    # batch_name = 9
+    #
+    # Automatically swap.
+
+    id_is_numeric = bool(
+        batch_id
+        and re.fullmatch(
+            r"\d+(?:\.0+)?",
+            batch_id,
+        )
+    )
+
+    name_is_numeric = bool(
+        batch_name
+        and re.fullmatch(
+            r"\d+(?:\.0+)?",
+            batch_name,
+        )
+    )
+
+    if (
+        not id_is_numeric
+        and name_is_numeric
+    ):
+
+        batch_id, batch_name = (
+            batch_name,
+            batch_id,
         )
 
-        if existing:
-            return existing
-
-    if full_name and dob:
-
-        existing = (
-            db.query(Student)
-            .filter(
-                Student.full_name.ilike(
-                    full_name
-                ),
-                Student.dob == dob,
-            )
-            .first()
-        )
-
-        if existing:
-            return existing
-
-    return None
+    return (
+        batch_id or None,
+        batch_name or None,
+    )
 
 
 # =========================================================
@@ -747,126 +446,206 @@ def find_duplicate_student(
 # =========================================================
 
 def normalize_record(
-    raw: dict,
+    record: dict[str, Any],
     db: Session,
-):
+) -> dict[str, Any]:
 
     errors = []
     warnings = []
 
-    row_number = int(
-        raw.get(
-            "row_number",
-            1,
-        )
-    )
+    # -----------------------------------------------------
+    # Normalize field names
+    # -----------------------------------------------------
 
-    full_name = (
-        str(
-            raw.get(
-                "full_name",
-                ""
-            )
-        ).strip()
-        if raw.get(
+    normalized = {}
+
+    for raw_key, value in record.items():
+
+        field_name = map_field_name(
+            raw_key
+        )
+
+        if field_name:
+
+            normalized[
+                field_name
+            ] = value
+
+    # -----------------------------------------------------
+    # Student values
+    # -----------------------------------------------------
+
+    full_name = clean_text(
+        normalized.get(
             "full_name"
-        ) is not None
-        else None
-    )
-
-    dob = parse_date(
-        raw.get(
-            "dob"
         )
     )
 
-    gender = (
-        str(
-            raw.get(
-                "gender"
-            )
-        ).strip()
-        if raw.get(
+    gender = clean_text(
+        normalized.get(
             "gender"
-        ) is not None
-        else None
-    )
+        )
+    ).title()
 
     blood_group = (
-        str(
-            raw.get(
+        clean_text(
+            normalized.get(
                 "blood_group"
             )
-        ).strip()
-        if raw.get(
-            "blood_group"
-        ) is not None
-        else None
+        ).upper()
+        or None
     )
 
-    batch_name = (
-        str(
-            raw.get(
-                "batch"
-            )
-        ).strip()
-        if raw.get(
-            "batch"
-        ) is not None
-        else None
-    )
-
-    join_date = parse_date(
-        raw.get(
-            "join_date"
+    parent_name = clean_text(
+        normalized.get(
+            "parent_name"
         )
     )
 
-    parent_name = (
-        str(
-            raw.get(
-                "parent_name"
-            )
-        ).strip()
-        if raw.get(
-            "parent_name"
-        ) is not None
-        else None
-    )
-
-    phone_number = normalize_phone(
-        raw.get(
+    phone_number = clean_phone(
+        normalized.get(
             "phone_number"
         )
     )
 
-    emergency_contact = normalize_phone(
-        raw.get(
+    emergency_contact = clean_phone(
+        normalized.get(
             "emergency_contact"
         )
     )
 
-    monthly_fee = parse_integer(
-        raw.get(
+    avatar_uri = (
+        clean_text(
+            normalized.get(
+                "avatar_uri"
+            )
+        )
+        or None
+    )
+
+    # -----------------------------------------------------
+    # Dates
+    # -----------------------------------------------------
+
+    dob = parse_date_value(
+        normalized.get(
+            "dob"
+        )
+    )
+
+    join_date = parse_date_value(
+        normalized.get(
+            "join_date"
+        )
+    )
+
+    # -----------------------------------------------------
+    # Batch
+    # -----------------------------------------------------
+
+    batch_id_raw, batch_name_raw = (
+        fix_batch_values(
+            normalized.get(
+                "batch_id"
+            ),
+
+            normalized.get(
+                "batch_name"
+            ),
+        )
+    )
+
+    # Batch ID optional.
+    # Batch Name alone works.
+
+    batch = find_batch(
+        db=db,
+        batch_id=batch_id_raw,
+        batch_name=batch_name_raw,
+    )
+
+    # -----------------------------------------------------
+    # Resolved batch
+    # -----------------------------------------------------
+
+    if batch is None:
+
+        errors.append(
+            (
+                f"Batch '{batch_name_raw}' "
+                f"/ ID '{batch_id_raw}' "
+                "was not found or inactive"
+            )
+        )
+
+        resolved_batch_id = None
+
+        resolved_batch_name = (
+            batch_name_raw
+            or None
+        )
+
+    else:
+
+        resolved_batch_id = (
+            batch.id
+        )
+
+        resolved_batch_name = (
+            batch.batch_name
+        )
+
+        # If both values supplied,
+        # make sure they match.
+
+        if batch_id_raw:
+
+            try:
+
+                given_batch_id = int(
+                    float(
+                        str(
+                            batch_id_raw
+                        )
+                    )
+                )
+
+            except (
+                TypeError,
+                ValueError,
+            ):
+
+                given_batch_id = None
+
+            if (
+                given_batch_id
+                is not None
+                and given_batch_id
+                != batch.id
+            ):
+
+                errors.append(
+                    (
+                        f"Batch ID "
+                        f"{given_batch_id} "
+                        f"does not match "
+                        f"batch '{batch.batch_name}'"
+                    )
+                )
+
+    # -----------------------------------------------------
+    # Monthly Fee
+    # -----------------------------------------------------
+
+    monthly_fee = parse_int_value(
+        normalized.get(
             "monthly_fee"
         )
     )
 
-    avatar_uri = (
-        str(
-            raw.get(
-                "avatar_uri"
-            )
-        ).strip()
-        if raw.get(
-            "avatar_uri"
-        ) is not None
-        else None
-    )
-
-    # =====================================================
-    # REQUIRED FIELD VALIDATION
-    # =====================================================
+    # -----------------------------------------------------
+    # Validation
+    # -----------------------------------------------------
 
     if not full_name:
 
@@ -874,29 +653,38 @@ def normalize_record(
             "Full name is required"
         )
 
-    if not dob:
+    if dob is None:
 
         errors.append(
             "Valid date of birth is required"
         )
 
-    if not gender:
+    if gender not in {
+        "Male",
+        "Female",
+        "Other",
+    }:
 
         errors.append(
-            "Gender is required"
+            "Gender must be Male, Female, or Other"
         )
 
-    if not batch_name:
+    if blood_group:
 
-        errors.append(
-            "Batch is required"
-        )
+        if blood_group not in {
+            "A+",
+            "A-",
+            "B+",
+            "B-",
+            "AB+",
+            "AB-",
+            "O+",
+            "O-",
+        }:
 
-    if not join_date:
-
-        errors.append(
-            "Valid join date is required"
-        )
+            errors.append(
+                "Invalid blood group"
+            )
 
     if not parent_name:
 
@@ -911,11 +699,15 @@ def normalize_record(
         )
 
     elif len(
-        phone_number
-    ) != 10:
+        re.sub(
+            r"\D",
+            "",
+            phone_number,
+        )
+    ) < 10:
 
         errors.append(
-            "Phone number must contain 10 digits"
+            "Phone number must contain at least 10 digits"
         )
 
     if not emergency_contact:
@@ -925,185 +717,119 @@ def normalize_record(
         )
 
     elif len(
-        emergency_contact
-    ) != 10:
+        re.sub(
+            r"\D",
+            "",
+            emergency_contact,
+        )
+    ) < 10:
 
         errors.append(
-            "Emergency contact must contain 10 digits"
+            "Emergency contact must contain at least 10 digits"
         )
 
-    if monthly_fee is None:
-
-        errors.append(
-            "Monthly fee is required"
-        )
-
-    elif monthly_fee <= 0:
+    if (
+        monthly_fee is None
+        or monthly_fee <= 0
+    ):
 
         errors.append(
             "Monthly fee must be greater than 0"
         )
 
-    # =====================================================
-    # BATCH
-    # =====================================================
+    # -----------------------------------------------------
+    # JOIN DATE
+    #
+    # If missing → today
+    # -----------------------------------------------------
 
-    batch = None
+    if join_date is None:
 
-    if batch_name:
-
-        batch = find_batch(
-            db,
-            batch_name
-        )
-
-        if batch is None:
-
-            errors.append(
-                f"Batch '{batch_name}' "
-                "was not found"
-            )
-
-    # =====================================================
-    # DUPLICATE
-    # =====================================================
-
-    duplicate = find_duplicate_student(
-        db,
-        phone_number,
-        full_name,
-        dob,
-    )
-
-    if duplicate:
+        join_date = date.today()
 
         warnings.append(
-            (
-                f"Possible duplicate student. "
-                f"Existing student ID: "
-                f"{duplicate.id}"
-            )
+            "Join date was not provided. "
+            "Today's date was used."
         )
 
-    # =====================================================
-    # AGE
-    # =====================================================
+    # -----------------------------------------------------
+    # Duplicate preview warning
+    # -----------------------------------------------------
 
-    if dob:
+    if phone_number:
 
-        today = date.today()
+        duplicate = (
+            db.query(Student)
+            .filter(
+                Student.phone_number
+                == phone_number
+            )
+            .first()
+        )
 
-        age = (
-            today.year
-            - dob.year
-            - (
+        if duplicate:
+
+            warnings.append(
                 (
-                    today.month,
-                    today.day
-                )
-                < (
-                    dob.month,
-                    dob.day
+                    "Student already exists "
+                    "with this phone number"
                 )
             )
-        )
 
-        if age < 3:
-
-            errors.append(
-                "Student age must be at least 3 years"
-            )
-
-    # =====================================================
-    # GENDER
-    # =====================================================
-
-    valid_genders = {
-        "male",
-        "female",
-        "other",
-    }
-
-    if gender:
-
-        if normalize_text(
-            gender
-        ) not in valid_genders:
-
-            errors.append(
-                "Invalid gender. "
-                "Use Male, Female or Other"
-            )
-
-    # =====================================================
-    # BLOOD GROUP
-    # =====================================================
-
-    valid_blood_groups = {
-        "a+",
-        "a-",
-        "b+",
-        "b-",
-        "ab+",
-        "ab-",
-        "o+",
-        "o-",
-    }
-
-    if blood_group:
-
-        if normalize_text(
-            blood_group
-        ) not in valid_blood_groups:
-
-            errors.append(
-                "Invalid blood group"
-            )
-
-    # =====================================================
-    # STATUS
-    # =====================================================
+    # -----------------------------------------------------
+    # Status
+    # -----------------------------------------------------
 
     if errors:
 
-        status = "invalid"
+        record_status = (
+            "invalid"
+        )
 
     elif warnings:
 
-        status = "warning"
+        record_status = (
+            "warning"
+        )
 
     else:
 
-        status = "valid"
+        record_status = (
+            "valid"
+        )
+
+    # -----------------------------------------------------
+    # Final normalized data
+    # -----------------------------------------------------
 
     return {
-        "row_number": row_number,
 
-        "full_name": full_name,
+        "full_name":
+            full_name,
 
-        "dob": dob,
+        "dob":
+            dob,
 
-        "gender": gender,
+        "gender":
+            gender,
 
-        "blood_group": blood_group,
+        "blood_group":
+            blood_group,
 
-        "batch_id": (
-            batch.id
-            if batch
-            else None
-        ),
+        "batch_id":
+            resolved_batch_id,
 
-        "batch_name": (
-            batch.batch_name
-            if batch
-            else batch_name
-        ),
+        "batch_name":
+            resolved_batch_name,
 
-        "join_date": join_date,
+        "join_date":
+            join_date,
 
-        "parent_name": parent_name,
+        "parent_name":
+            parent_name,
 
-        "phone_number": phone_number,
+        "phone_number":
+            phone_number,
 
         "emergency_contact":
             emergency_contact,
@@ -1115,7 +841,7 @@ def normalize_record(
             avatar_uri,
 
         "status":
-            status,
+            record_status,
 
         "errors":
             errors,
@@ -1123,3 +849,569 @@ def normalize_record(
         "warnings":
             warnings,
     }
+
+
+# =========================================================
+# XLSX
+# =========================================================
+
+def parse_xlsx(
+    file_path: str,
+):
+
+    workbook = load_workbook(
+        filename=file_path,
+        data_only=True,
+    )
+
+    sheet = workbook.active
+
+    rows = list(
+        sheet.iter_rows(
+            values_only=True
+        )
+    )
+
+    if not rows:
+        return []
+
+    headers = [
+        clean_text(value)
+        for value in rows[0]
+    ]
+
+    records = []
+
+    for row in rows[1:]:
+
+        if not any(
+            value not in (
+                None,
+                "",
+            )
+            for value in row
+        ):
+            continue
+
+        record = {}
+
+        for index, value in enumerate(
+            row
+        ):
+
+            if (
+                index
+                < len(headers)
+                and headers[index]
+            ):
+
+                record[
+                    headers[index]
+                ] = value
+
+        records.append(
+            record
+        )
+
+    return records
+
+
+# =========================================================
+# CSV
+# =========================================================
+
+def parse_csv(
+    file_path: str,
+):
+
+    with open(
+        file_path,
+        "r",
+        encoding="utf-8-sig",
+        newline="",
+    ) as file:
+
+        reader = (
+            csv.DictReader(file)
+        )
+
+        return [
+            dict(row)
+            for row in reader
+            if any(
+                clean_text(value)
+                for value
+                in row.values()
+            )
+        ]
+
+
+# =========================================================
+# DOCX
+# =========================================================
+
+def parse_docx(
+    file_path: str,
+):
+
+    document = Document(
+        file_path
+    )
+
+    # First: actual table
+    for table in document.tables:
+
+        if not table.rows:
+            continue
+
+        headers = [
+            clean_text(
+                cell.text
+            )
+            for cell
+            in table.rows[0].cells
+        ]
+
+        records = []
+
+        for row in table.rows[1:]:
+
+            values = [
+                clean_text(
+                    cell.text
+                )
+                for cell
+                in row.cells
+            ]
+
+            if not any(values):
+                continue
+
+            record = {}
+
+            for index, value in enumerate(
+                values
+            ):
+
+                if (
+                    index
+                    < len(headers)
+                    and headers[index]
+                ):
+
+                    record[
+                        headers[index]
+                    ] = value
+
+            records.append(
+                record
+            )
+
+        if records:
+
+            return records
+
+    # Otherwise paragraphs
+    text = "\n".join(
+        paragraph.text
+        for paragraph
+        in document.paragraphs
+        if paragraph.text.strip()
+    )
+
+    return parse_text_records(
+        text
+    )
+
+
+# =========================================================
+# TEXT
+# =========================================================
+
+def parse_text_records(
+    text: str,
+):
+
+    text = (
+        text
+        .replace(
+            "\r\n",
+            "\n",
+        )
+        .replace(
+            "\r",
+            "\n",
+        )
+    )
+
+    lines = [
+        line.strip()
+        for line
+        in text.split("\n")
+    ]
+
+    lines = [
+        line
+        for line
+        in lines
+        if line
+    ]
+
+    if not lines:
+        return []
+
+    # -----------------------------------------------------
+    # Excel pasted as TAB-separated
+    # -----------------------------------------------------
+
+    first_parts = re.split(
+        r"\t+|\|",
+        lines[0],
+    )
+
+    mapped_headers = [
+        map_field_name(
+            item
+        )
+        for item
+        in first_parts
+    ]
+
+    if (
+        len(mapped_headers)
+        >= 5
+        and sum(
+            item is not None
+            for item
+            in mapped_headers
+        )
+        >= 5
+    ):
+
+        records = []
+
+        for line in lines[1:]:
+
+            parts = re.split(
+                r"\t+|\|",
+                line,
+            )
+
+            if len(parts) < 5:
+                continue
+
+            record = {}
+
+            for index, value in enumerate(
+                parts
+            ):
+
+                if (
+                    index
+                    >= len(
+                        mapped_headers
+                    )
+                ):
+                    break
+
+                field_name = (
+                    mapped_headers[index]
+                )
+
+                if field_name:
+
+                    record[
+                        field_name
+                    ] = value.strip()
+
+            if record:
+
+                records.append(
+                    record
+                )
+
+        if records:
+
+            return records
+
+    # -----------------------------------------------------
+    # Key/value blocks
+    # -----------------------------------------------------
+
+    records = []
+
+    current = {}
+
+    field_pattern = re.compile(
+        r"^\s*(.+?)\s*[:=]\s*(.*?)\s*$"
+    )
+
+    for line in lines:
+
+        # Student 1 / Student 2
+        if re.match(
+            r"^student\s*\d+",
+            line,
+            re.IGNORECASE,
+        ):
+
+            if current:
+
+                records.append(
+                    current
+                )
+
+                current = {}
+
+            continue
+
+        match = (
+            field_pattern.match(
+                line
+            )
+        )
+
+        if match:
+
+            raw_key = (
+                match.group(1)
+                .strip()
+            )
+
+            raw_value = (
+                match.group(2)
+                .strip()
+            )
+
+            field_name = (
+                map_field_name(
+                    raw_key
+                )
+            )
+
+            if field_name:
+
+                current[
+                    field_name
+                ] = raw_value
+
+    if current:
+
+        records.append(
+            current
+        )
+
+    return records
+
+
+def parse_txt(
+    file_path: str,
+):
+
+    with open(
+        file_path,
+        "r",
+        encoding="utf-8-sig",
+    ) as file:
+
+        return parse_text_records(
+            file.read()
+        )
+
+
+# =========================================================
+# IMAGE OCR
+# =========================================================
+
+def preprocess_image(
+    image: Image.Image,
+):
+
+    image = image.convert(
+        "L"
+    )
+
+    image = ImageOps.autocontrast(
+        image
+    )
+
+    width, height = (
+        image.size
+    )
+
+    if width < 1600:
+
+        scale = (
+            1600 / width
+        )
+
+        image = image.resize(
+            (
+                int(
+                    width * scale
+                ),
+                int(
+                    height * scale
+                ),
+            )
+        )
+
+    return image
+
+
+def parse_image(
+    file_path: str,
+):
+
+    try:
+
+        image = Image.open(
+            file_path
+        )
+
+    except Exception as exc:
+
+        raise ValueError(
+            f"Unable to open image: {exc}"
+        ) from exc
+
+    image = preprocess_image(
+        image
+    )
+
+    try:
+
+        text = (
+            pytesseract
+            .image_to_string(
+                image,
+                config="--psm 6",
+            )
+        )
+
+    except Exception as exc:
+
+        raise ValueError(
+            (
+                "OCR failed. "
+                "Install Tesseract OCR "
+                "and add it to PATH. "
+                f"Details: {exc}"
+            )
+        ) from exc
+
+    if not text.strip():
+
+        raise ValueError(
+            "No readable student data found in image"
+        )
+
+    return parse_text_records(
+        text
+    )
+
+
+# =========================================================
+# PDF
+# =========================================================
+
+def parse_pdf(
+    file_path: str,
+):
+
+    if PdfReader is None:
+
+        raise ValueError(
+            "PDF support requires pypdf. "
+            "Run: pip install pypdf"
+        )
+
+    reader = PdfReader(
+        file_path
+    )
+
+    pages = []
+
+    for page in reader.pages:
+
+        text = (
+            page.extract_text()
+            or ""
+        )
+
+        if text.strip():
+
+            pages.append(
+                text
+            )
+
+    text = "\n".join(
+        pages
+    )
+
+    if not text.strip():
+
+        raise ValueError(
+            "No text could be extracted from PDF. "
+            "For scanned PDFs, upload the page as PNG/JPG."
+        )
+
+    return parse_text_records(
+        text
+    )
+
+
+# =========================================================
+# MAIN PARSER
+# =========================================================
+
+def parse_file(
+    file_path: str,
+):
+
+    extension = (
+        Path(file_path)
+        .suffix
+        .lower()
+    )
+
+    if extension == ".xlsx":
+        return parse_xlsx(
+            file_path
+        )
+
+    if extension == ".csv":
+        return parse_csv(
+            file_path
+        )
+
+    if extension == ".docx":
+        return parse_docx(
+            file_path
+        )
+
+    if extension == ".txt":
+        return parse_txt(
+            file_path
+        )
+
+    if extension in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+    }:
+        return parse_image(
+            file_path
+        )
+
+    if extension == ".pdf":
+        return parse_pdf(
+            file_path
+        )
+
+    raise ValueError(
+        "Unsupported file type. "
+        "Supported: XLSX, CSV, DOCX, TXT, PDF, "
+        "JPG, JPEG, PNG, WEBP"
+    )
