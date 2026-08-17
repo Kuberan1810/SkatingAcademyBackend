@@ -286,6 +286,8 @@ class BatchPageItem(BaseModel):
 
     attendance: str | None
 
+    session_id: str | None = None
+
 
 # =========================================================
 # BATCH PAGE DATA

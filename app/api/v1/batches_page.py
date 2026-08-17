@@ -364,17 +364,24 @@ def get_batches_page(
             .first()
         )
 
+        if session is None:
+            session = (
+                db.query(SessionModel)
+                .filter(
+                    SessionModel.batch_id == batch.id
+                )
+                .order_by(
+                    SessionModel.session_date.desc(),
+                    SessionModel.id.desc(),
+                )
+                .first()
+            )
+
         # =================================================
         # DEFAULT STATUS
         # =================================================
 
-        if training_date != today:
-
-            batch_status = "upcoming"
-
-            attendance_value = None
-
-        elif session is None:
+        if session is None:
 
             batch_status = "upcoming"
 
@@ -495,6 +502,9 @@ def get_batches_page(
 
                 "attendance":
                     attendance_value,
+
+                "session_id":
+                    str(session.id) if session else None,
             }
         )
 
