@@ -34,7 +34,7 @@ from app.services.student_import import (
     parse_file,
     parse_text_records,
 )
-
+import pytesseract
 
 router = APIRouter(
     prefix="/students/import",
@@ -639,3 +639,25 @@ def confirm_student_import(
                 failed,
         },
     }
+
+
+
+@router.get("/ocr-test")
+def ocr_test():
+    try:
+        version = pytesseract.get_tesseract_version()
+
+        return {
+            "status": "success",
+            "ocr": "available",
+            "version": str(version),
+            "executable": pytesseract.pytesseract.tesseract_cmd,
+        }
+
+    except Exception as exc:
+        return {
+            "status": "error",
+            "ocr": "unavailable",
+            "message": str(exc),
+            "executable": pytesseract.pytesseract.tesseract_cmd,
+        }
