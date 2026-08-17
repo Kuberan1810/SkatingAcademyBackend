@@ -342,3 +342,15 @@ class StudentProfileResponse(BaseModel):
     status: str
     message: str
     data: StudentProfileData
+
+
+
+
+
+
+
+class BulkDeleteStudentsRequest(BaseModel):
+    student_ids: list[int] = Field(
+        min_length=1,
+        max_length=500,
+    )

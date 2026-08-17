@@ -28,6 +28,9 @@ from app.models.session import Session as SessionModel
 from app.models.attendance import Attendance
 from app.models.fee import FeePayment
 
+from app.schemas.student import (
+    BulkDeleteStudentsRequest,
+)
 
 
 
@@ -1632,3 +1635,150 @@ def delete_student(
 
 
 
+
+@router.post(
+    "/bulk-delete",
+)
+def bulk_delete_students(
+    request: BulkDeleteStudentsRequest,
+
+    db: Session = Depends(
+        get_db
+    ),
+
+    current_admin: Admin = Depends(
+        get_current_admin
+    ),
+):
+    # =====================================================
+    # CLEAN / UNIQUE IDS
+    # =====================================================
+
+    student_ids = list(
+        set(
+            request.student_ids
+        )
+    )
+
+    if not student_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="No student IDs provided",
+        )
+
+    # =====================================================
+    # FETCH STUDENTS
+    # =====================================================
+
+    students = (
+        db.query(Student)
+        .filter(
+            Student.id.in_(
+                student_ids
+            ),
+            Student.is_active.is_(True),
+        )
+        .all()
+    )
+
+    found_ids = {
+        student.id
+        for student in students
+    }
+
+    not_found_ids = [
+        student_id
+        for student_id in student_ids
+        if student_id not in found_ids
+    ]
+
+    # =====================================================
+    # DELETE
+    # =====================================================
+
+    deleted = []
+
+    failed = []
+
+    for student in students:
+
+        try:
+            # ---------------------------------------------
+            # IMPORTANT:
+            # Soft delete is safer than hard delete.
+            # ---------------------------------------------
+
+            student.is_active = False
+
+            deleted.append(
+                {
+                    "id": student.id,
+                    "full_name": student.full_name,
+                    "status": "deleted",
+                }
+            )
+
+        except Exception as exc:
+
+            failed.append(
+                {
+                    "id": student.id,
+                    "full_name": student.full_name,
+                    "status": "failed",
+                    "error": str(exc),
+                }
+            )
+
+    # =====================================================
+    # COMMIT
+    # =====================================================
+
+    try:
+
+        db.commit()
+
+    except Exception as exc:
+
+        db.rollback()
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Bulk student delete failed: "
+                f"{str(exc)}"
+            ),
+        ) from exc
+
+    # =====================================================
+    # RESPONSE
+    # =====================================================
+
+    return {
+        "status": "success",
+
+        "message":
+            "Bulk student deletion completed",
+
+        "data": {
+            "requested_count":
+                len(student_ids),
+
+            "deleted_count":
+                len(deleted),
+
+            "failed_count":
+                len(failed),
+
+            "not_found_count":
+                len(not_found_ids),
+
+            "deleted":
+                deleted,
+
+            "not_found":
+                not_found_ids,
+
+            "failed":
+                failed,
+        },
+    }
