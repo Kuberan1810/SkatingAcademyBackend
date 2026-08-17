@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: skatingacademybackend
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/students/import/ocr-test
