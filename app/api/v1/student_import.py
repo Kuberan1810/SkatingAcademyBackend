@@ -138,7 +138,7 @@ def build_preview_response(
 @router.post(
     "/preview"
 )
-def preview_student_import(
+async def preview_student_import(
 
     file: UploadFile = File(...),
 
@@ -152,48 +152,37 @@ def preview_student_import(
 ):
 
     if not file.filename:
-
         raise HTTPException(
             status_code=400,
             detail="File name is required",
         )
 
-    extension = (
-        os.path.splitext(
-            file.filename
-        )[1]
-        .lower()
-    )
+    extension = os.path.splitext(
+        file.filename
+    )[1].lower()
 
     if extension not in ALLOWED_EXTENSIONS:
-
         raise HTTPException(
             status_code=400,
             detail=(
                 "Unsupported file type. "
-                "Supported: XLSX, CSV, DOCX, "
-                "TXT, PDF, JPG, JPEG, PNG, WEBP"
+                "Supported: XLSX, CSV, DOCX, TXT, "
+                "PDF, JPG, JPEG, PNG, WEBP"
             ),
         )
 
-    content = (
-        file.file.read()
-    )
+    content = await file.read()
 
     if not content:
-
         raise HTTPException(
             status_code=400,
             detail="Uploaded file is empty",
         )
 
     if len(content) > MAX_FILE_SIZE:
-
         raise HTTPException(
             status_code=413,
-            detail=(
-                "File size cannot exceed 10 MB"
-            ),
+            detail="File size cannot exceed 10 MB",
         )
 
     temp_path = None
@@ -209,20 +198,18 @@ def preview_student_import(
                 content
             )
 
-            temp_path = (
-                temp_file.name
-            )
+            temp_path = temp_file.name
 
         raw_records = parse_file(
             temp_path
         )
 
         if not raw_records:
-
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "No student records found"
+                    "No student records found "
+                    "in uploaded file"
                 ),
             )
 
@@ -250,10 +237,7 @@ def preview_student_import(
             students,
             source="file",
             file_name=file.filename,
-            file_type=extension.replace(
-                ".",
-                "",
-            ),
+            file_type=extension[1:],
         )
 
     except HTTPException:
@@ -274,11 +258,9 @@ def preview_student_import(
                 temp_path
             )
         ):
-
             os.remove(
                 temp_path
             )
-
 
 # =========================================================
 # TEXT PREVIEW

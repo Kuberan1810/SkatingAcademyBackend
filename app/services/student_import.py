@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import os
 import re
+import shutil
 
 from datetime import date, datetime
 from pathlib import Path
@@ -29,18 +30,40 @@ from app.models.student import Student
 
 
 # =========================================================
-# TESSERACT
+# TESSERACT OCR CONFIGURATION
 # =========================================================
 
-TESSERACT_PATH = (
-    r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-)
+def configure_tesseract() -> None:
 
-if os.path.isfile(TESSERACT_PATH):
-    pytesseract.pytesseract.tesseract_cmd = (
-        TESSERACT_PATH
+    # Windows
+    windows_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+    ]
+
+    for path in windows_paths:
+
+        if os.path.isfile(path):
+
+            pytesseract.pytesseract.tesseract_cmd = path
+
+            return
+
+    # Linux / Render / Docker
+    tesseract_path = shutil.which(
+        "tesseract"
     )
 
+    if tesseract_path:
+
+        pytesseract.pytesseract.tesseract_cmd = (
+            tesseract_path
+        )
+
+        return
+
+
+configure_tesseract()
 
 # =========================================================
 # FIELD ALIASES
@@ -922,100 +945,300 @@ def preprocess_image(
 
     return image
 
-
 def parse_image(
     file_path: str,
 ):
 
     try:
 
+        # Check Tesseract before OCR
+        if not shutil.which(
+            "tesseract"
+        ) and not os.path.isfile(
+            pytesseract.pytesseract.tesseract_cmd
+            or ""
+        ):
+
+            raise ValueError(
+                "Tesseract OCR is not installed "
+                "or not available in PATH."
+            )
+
         image = Image.open(
             file_path
         )
 
-    except Exception as exc:
-
-        raise ValueError(
-            f"Unable to open image: {exc}"
-        ) from exc
-
-    image = preprocess_image(
-        image
-    )
-
-    try:
-
-        text = (
-            pytesseract
-            .image_to_string(
-                image,
-                config="--psm 6",
-            )
+        image = image.convert(
+            "RGB"
         )
 
+        image = ImageOps.autocontrast(
+            image.convert("L")
+        )
+
+        width, height = image.size
+
+        if width < 1600:
+
+            scale = 1600 / width
+
+            image = image.resize(
+                (
+                    int(width * scale),
+                    int(height * scale),
+                )
+            )
+
+        text = pytesseract.image_to_string(
+            image,
+            config="--psm 6",
+        )
+
+    except pytesseract.TesseractNotFoundError as exc:
+
+        raise ValueError(
+            "Tesseract OCR is not installed "
+            "or not configured correctly."
+        ) from exc
+
     except Exception as exc:
 
         raise ValueError(
-            f"OCR failed: {exc}"
+            f"Image OCR failed: {exc}"
         ) from exc
 
     if not text.strip():
 
         raise ValueError(
-            "No readable student data found in image"
+            "No readable student data found in image."
         )
 
     return parse_text_records(
         text
     )
-
-
 # =========================================================
 # PDF
 # =========================================================
-
-def parse_pdf(
+def a
     file_path: str,
 ):
+    """
+    Robust PDF student import.
 
-    if PdfReader is None:
+    Flow:
+    1. Try PyMuPDF text extraction.
+    2. If text exists -> parse text.
+    3. If PDF has no selectable text -> OCR pages.
+    4. If both fail -> return a clear error.
+    """
 
-        raise ValueError(
-            "Install pypdf for PDF support"
+    # =====================================================
+    # 1. PYMuPDF
+    # =====================================================
+
+    try:
+        import fitz
+
+        document = fitz.open(
+            file_path
         )
 
-    reader = PdfReader(
-        file_path
-    )
+        extracted_text_parts = []
 
-    pages = []
+        for page_number in range(
+            document.page_count
+        ):
+            page = document.load_page(
+                page_number
+            )
 
-    for page in reader.pages:
+            page_text = (
+                page.get_text(
+                    "text"
+                )
+                or ""
+            )
 
-        text = (
-            page.extract_text()
-            or ""
+            if page_text.strip():
+                extracted_text_parts.append(
+                    page_text
+                )
+
+        text = "\n".join(
+            extracted_text_parts
         )
+
+        # -------------------------------------------------
+        # Normal text PDF
+        # -------------------------------------------------
 
         if text.strip():
 
-            pages.append(
+            document.close()
+
+            records = parse_text_records(
                 text
             )
 
-    text = "\n".join(
-        pages
-    )
+            if records:
+                return records
 
-    if not text.strip():
+        # =================================================
+        # 2. OCR FALLBACK
+        # =================================================
+
+        ocr_records = []
+
+        for page_number in range(
+            document.page_count
+        ):
+            page = document.load_page(
+                page_number
+            )
+
+            # Render PDF page to image
+            pix = page.get_pixmap(
+                matrix=fitz.Matrix(
+                    2,
+                    2,
+                ),
+                alpha=False,
+            )
+
+            image = Image.frombytes(
+                "RGB",
+                [
+                    pix.width,
+                    pix.height,
+                ],
+                pix.samples,
+            )
+
+            # Preprocess
+            image = preprocess_image(
+                image
+            )
+
+            try:
+
+                ocr_text = (
+                    pytesseract
+                    .image_to_string(
+                        image,
+                        config="--psm 6",
+                    )
+                )
+
+            except (
+                pytesseract
+                .TesseractNotFoundError
+            ) as exc:
+
+                document.close()
+
+                raise ValueError(
+                    (
+                        "PDF has no extractable text "
+                        "and Tesseract OCR is not available."
+                    )
+                ) from exc
+
+            if ocr_text.strip():
+
+                page_records = (
+                    parse_text_records(
+                        ocr_text
+                    )
+                )
+
+                ocr_records.extend(
+                    page_records
+                )
+
+        document.close()
+
+        if ocr_records:
+
+            return ocr_records
 
         raise ValueError(
-            "No text found in PDF"
+            "No student data could be extracted from the PDF."
         )
 
-    return parse_text_records(
-        text
-    )
+    # =====================================================
+    # PDF OPEN / CORRUPTION ERROR
+    # =====================================================
+
+    except ImportError as exc:
+
+        raise ValueError(
+            (
+                "PDF support requires PyMuPDF. "
+                "Run: pip install pymupdf"
+            )
+        ) from exc
+
+    except Exception as exc:
+
+        # -------------------------------------------------
+        # Last fallback: try pypdf
+        # -------------------------------------------------
+
+        try:
+
+            if PdfReader is not None:
+
+                reader = PdfReader(
+                    file_path,
+                    strict=False,
+                )
+
+                fallback_pages = []
+
+                for page in reader.pages:
+
+                    try:
+
+                        page_text = (
+                            page.extract_text()
+                            or ""
+                        )
+
+                        if page_text.strip():
+
+                            fallback_pages.append(
+                                page_text
+                            )
+
+                    except Exception:
+                        continue
+
+                fallback_text = "\n".join(
+                    fallback_pages
+                )
+
+                if fallback_text.strip():
+
+                    records = (
+                        parse_text_records(
+                            fallback_text
+                        )
+                    )
+
+                    if records:
+                        return records
+
+        except Exception:
+            pass
+
+        raise ValueError(
+            (
+                "Unable to read PDF. "
+                "The PDF may be corrupted, incomplete, "
+                "or unsupported. "
+                f"Details: {exc}"
+            )
+        ) from exc
 
 
 # =========================================================
