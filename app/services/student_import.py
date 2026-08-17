@@ -34,32 +34,37 @@ from app.models.student import Student
 # =========================================================
 
 def configure_tesseract() -> None:
+    # Environment variable override
+    env_path = os.getenv("TESSERACT_CMD")
+    if env_path and os.path.isfile(env_path):
+        pytesseract.pytesseract.tesseract_cmd = env_path
+        return
 
-    # Windows
+    # Standard Linux / Docker paths
+    linux_paths = [
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/usr/bin/tesseract-ocr",
+    ]
+    for path in linux_paths:
+        if os.path.isfile(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            return
+
+    # Windows paths
     windows_paths = [
         r"C:\Program Files\Tesseract-OCR\tesseract.exe",
         r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
     ]
-
     for path in windows_paths:
-
         if os.path.isfile(path):
-
             pytesseract.pytesseract.tesseract_cmd = path
-
             return
 
-    # Linux / Render / Docker
-    tesseract_path = shutil.which(
-        "tesseract"
-    )
-
+    # System PATH search
+    tesseract_path = shutil.which("tesseract")
     if tesseract_path:
-
-        pytesseract.pytesseract.tesseract_cmd = (
-            tesseract_path
-        )
-
+        pytesseract.pytesseract.tesseract_cmd = tesseract_path
         return
 
 
