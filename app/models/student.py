@@ -32,11 +32,13 @@ class Student(Base):
         nullable=False,
     )
 
-    gender: Mapped[str] = mapped_column(
+    # OPTIONAL
+    gender: Mapped[str | None] = mapped_column(
         String(20),
-        nullable=False,
+        nullable=True,
     )
 
+    # OPTIONAL
     blood_group: Mapped[str | None] = mapped_column(
         String(10),
         nullable=True,
@@ -48,9 +50,10 @@ class Student(Base):
         index=True,
     )
 
-    join_date: Mapped[date] = mapped_column(
+    # OPTIONAL
+    join_date: Mapped[date | None] = mapped_column(
         Date,
-        nullable=False,
+        nullable=True,
     )
 
     parent_name: Mapped[str] = mapped_column(
@@ -63,9 +66,10 @@ class Student(Base):
         nullable=False,
     )
 
-    emergency_contact: Mapped[str] = mapped_column(
+    # OPTIONAL
+    emergency_contact: Mapped[str | None] = mapped_column(
         String(20),
-        nullable=False,
+        nullable=True,
     )
 
     monthly_fee: Mapped[int] = mapped_column(
@@ -96,8 +100,3 @@ class Student(Base):
         onupdate=func.now(),
         nullable=False,
     )
-
-
-
-
-

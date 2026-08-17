@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import csv
-import io
 import os
 import re
+
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 from docx import Document
 from openpyxl import load_workbook
-from PIL import Image, ImageOps
+
+from PIL import (
+    Image,
+    ImageOps,
+)
+
 import pytesseract
 
 try:
@@ -20,12 +25,11 @@ except ImportError:
 
 from sqlalchemy.orm import Session
 
-from app.models.batch import Batch
 from app.models.student import Student
 
 
 # =========================================================
-# TESSERACT OCR
+# TESSERACT
 # =========================================================
 
 TESSERACT_PATH = (
@@ -37,22 +41,6 @@ if os.path.isfile(TESSERACT_PATH):
         TESSERACT_PATH
     )
 
-# =========================================================
-# SUPPORTED FILE TYPES
-# =========================================================
-
-SUPPORTED_EXTENSIONS = {
-    ".xlsx",
-    ".csv",
-    ".docx",
-    ".txt",
-    ".pdf",
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".webp",
-}
-
 
 # =========================================================
 # FIELD ALIASES
@@ -60,7 +48,10 @@ SUPPORTED_EXTENSIONS = {
 
 FIELD_ALIASES = {
 
-    # Student
+    # -----------------------------------------------------
+    # REQUIRED
+    # -----------------------------------------------------
+
     "full name": "full_name",
     "fullname": "full_name",
     "full_name": "full_name",
@@ -68,63 +59,49 @@ FIELD_ALIASES = {
     "student name": "full_name",
     "student_name": "full_name",
 
-    # DOB
     "dob": "dob",
     "date of birth": "dob",
     "dateofbirth": "dob",
     "date_of_birth": "dob",
 
-    # Gender
     "gender": "gender",
     "sex": "gender",
 
-    # Blood group
-    "blood group": "blood_group",
-    "bloodgroup": "blood_group",
-    "blood_group": "blood_group",
-
-    # Batch ID
-    "batch id": "batch_id",
-    "batchid": "batch_id",
-    "batch_id": "batch_id",
-
-    # Batch name
-    "batch name": "batch_name",
-    "batchname": "batch_name",
-    "batch_name": "batch_name",
-    "batch": "batch_name",
-
-    # Join date
-    "join date": "join_date",
-    "joindate": "join_date",
-    "join_date": "join_date",
-
-    # Parent
     "parent name": "parent_name",
     "parentname": "parent_name",
     "parent_name": "parent_name",
     "guardian name": "parent_name",
+    "guardian": "parent_name",
 
-    # Phone
     "phone number": "phone_number",
     "phonenumber": "phone_number",
     "phone_number": "phone_number",
     "phone": "phone_number",
     "mobile": "phone_number",
+    "mobile number": "phone_number",
 
-    # Emergency
-    "emergency contact": "emergency_contact",
-    "emergencycontact": "emergency_contact",
-    "emergency_contact": "emergency_contact",
-    "emergency phone": "emergency_contact",
-
-    # Fee
     "monthly fee": "monthly_fee",
     "monthlyfee": "monthly_fee",
     "monthly_fee": "monthly_fee",
     "fee": "monthly_fee",
 
-    # Avatar
+    # -----------------------------------------------------
+    # OPTIONAL
+    # -----------------------------------------------------
+
+    "blood group": "blood_group",
+    "bloodgroup": "blood_group",
+    "blood_group": "blood_group",
+
+    "emergency contact": "emergency_contact",
+    "emergencycontact": "emergency_contact",
+    "emergency_contact": "emergency_contact",
+    "emergency phone": "emergency_contact",
+
+    "join date": "join_date",
+    "joindate": "join_date",
+    "join_date": "join_date",
+
     "avatar uri": "avatar_uri",
     "avatar_uri": "avatar_uri",
     "avatar": "avatar_uri",
@@ -132,18 +109,24 @@ FIELD_ALIASES = {
 
 
 # =========================================================
-# BASIC HELPERS
+# TEXT HELPERS
 # =========================================================
 
-def clean_text(value: Any) -> str:
+def clean_text(
+    value: Any,
+) -> str:
 
     if value is None:
         return ""
 
-    return str(value).strip()
+    return str(
+        value
+    ).strip()
 
 
-def normalize_key(value: Any) -> str:
+def normalize_key(
+    value: Any,
+) -> str:
 
     value = clean_text(
         value
@@ -173,7 +156,9 @@ def map_field_name(
 ) -> str | None:
 
     return FIELD_ALIASES.get(
-        normalize_key(value)
+        normalize_key(
+            value
+        )
     )
 
 
@@ -200,7 +185,9 @@ def parse_date_value(
     ):
         return value
 
-    value = clean_text(value)
+    value = clean_text(
+        value
+    )
 
     if not value:
         return None
@@ -217,16 +204,14 @@ def parse_date_value(
     ]
 
     for fmt in formats:
-
         try:
-
             return datetime.strptime(
                 value,
                 fmt,
             ).date()
 
         except ValueError:
-            pass
+            continue
 
     return None
 
@@ -242,7 +227,9 @@ def parse_int_value(
     if value is None:
         return None
 
-    text = clean_text(value)
+    text = clean_text(
+        value
+    )
 
     if not text:
         return None
@@ -273,171 +260,13 @@ def clean_phone(
     value: Any,
 ) -> str:
 
-    value = clean_text(
-        value
-    )
+    if value is None:
+        return ""
 
     return re.sub(
         r"[^\d+]",
         "",
-        value,
-    )
-
-
-# =========================================================
-# FIND BATCH
-# =========================================================
-
-def find_batch(
-    db: Session,
-    batch_id: int | str | None = None,
-    batch_name: str | None = None,
-) -> Batch | None:
-
-    # -----------------------------------------------------
-    # 1. BATCH ID
-    # -----------------------------------------------------
-
-    normalized_batch_id = None
-
-    if batch_id not in (
-        None,
-        "",
-    ):
-
-        try:
-
-            normalized_batch_id = int(
-                float(
-                    str(
-                        batch_id
-                    ).strip()
-                )
-            )
-
-        except (
-            TypeError,
-            ValueError,
-        ):
-
-            normalized_batch_id = None
-
-    # -----------------------------------------------------
-    # IMPORTANT
-    #
-    # ONLY INTEGER goes into Batch.id
-    #
-    # Never:
-    # Batch.id == "Sunday batch"
-    # -----------------------------------------------------
-
-    if (
-        normalized_batch_id
-        is not None
-    ):
-
-        batch = (
-            db.query(Batch)
-            .filter(
-                Batch.id
-                == normalized_batch_id,
-
-                Batch.is_active.is_(True),
-            )
-            .first()
-        )
-
-        if batch is not None:
-            return batch
-
-    # -----------------------------------------------------
-    # 2. BATCH NAME
-    # -----------------------------------------------------
-
-    if batch_name:
-
-        name = clean_text(
-            batch_name
-        )
-
-        if name:
-
-            batch = (
-                db.query(Batch)
-                .filter(
-                    Batch.batch_name.ilike(
-                        name
-                    ),
-
-                    Batch.is_active.is_(True),
-                )
-                .first()
-            )
-
-            if batch is not None:
-                return batch
-
-    return None
-
-
-# =========================================================
-# BATCH VALUE FIX
-# =========================================================
-
-def fix_batch_values(
-    batch_id: Any,
-    batch_name: Any,
-):
-
-    batch_id = clean_text(
-        batch_id
-    )
-
-    batch_name = clean_text(
-        batch_name
-    )
-
-    # Expected:
-    #
-    # batch_id   = 9
-    # batch_name = Sunday batch
-    #
-    # Possible bad parser:
-    #
-    # batch_id   = Sunday batch
-    # batch_name = 9
-    #
-    # Automatically swap.
-
-    id_is_numeric = bool(
-        batch_id
-        and re.fullmatch(
-            r"\d+(?:\.0+)?",
-            batch_id,
-        )
-    )
-
-    name_is_numeric = bool(
-        batch_name
-        and re.fullmatch(
-            r"\d+(?:\.0+)?",
-            batch_name,
-        )
-    )
-
-    if (
-        not id_is_numeric
-        and name_is_numeric
-    ):
-
-        batch_id, batch_name = (
-            batch_name,
-            batch_id,
-        )
-
-    return (
-        batch_id or None,
-        batch_name or None,
+        str(value),
     )
 
 
@@ -450,14 +279,14 @@ def normalize_record(
     db: Session,
 ) -> dict[str, Any]:
 
-    errors = []
-    warnings = []
+    errors: list[str] = []
+    warnings: list[str] = []
 
-    # -----------------------------------------------------
-    # Normalize field names
-    # -----------------------------------------------------
+    normalized: dict[str, Any] = {}
 
-    normalized = {}
+    # =====================================================
+    # MAP INPUT HEADERS
+    # =====================================================
 
     for raw_key, value in record.items():
 
@@ -471,9 +300,9 @@ def normalize_record(
                 field_name
             ] = value
 
-    # -----------------------------------------------------
-    # Student values
-    # -----------------------------------------------------
+    # =====================================================
+    # REQUIRED FIELDS
+    # =====================================================
 
     full_name = clean_text(
         normalized.get(
@@ -481,19 +310,18 @@ def normalize_record(
         )
     )
 
-    gender = clean_text(
+    dob = parse_date_value(
         normalized.get(
-            "gender"
+            "dob"
         )
-    ).title()
+    )
 
-    blood_group = (
+    gender = (
         clean_text(
             normalized.get(
-                "blood_group"
+                "gender"
             )
-        ).upper()
-        or None
+        ).title()
     )
 
     parent_name = clean_text(
@@ -508,9 +336,37 @@ def normalize_record(
         )
     )
 
-    emergency_contact = clean_phone(
+    monthly_fee = parse_int_value(
         normalized.get(
-            "emergency_contact"
+            "monthly_fee"
+        )
+    )
+
+    # =====================================================
+    # OPTIONAL FIELDS
+    # =====================================================
+
+    blood_group = (
+        clean_text(
+            normalized.get(
+                "blood_group"
+            )
+        ).upper()
+        or None
+    )
+
+    emergency_contact = (
+        clean_phone(
+            normalized.get(
+                "emergency_contact"
+            )
+        )
+        or None
+    )
+
+    join_date = parse_date_value(
+        normalized.get(
+            "join_date"
         )
     )
 
@@ -523,129 +379,9 @@ def normalize_record(
         or None
     )
 
-    # -----------------------------------------------------
-    # Dates
-    # -----------------------------------------------------
-
-    dob = parse_date_value(
-        normalized.get(
-            "dob"
-        )
-    )
-
-    join_date = parse_date_value(
-        normalized.get(
-            "join_date"
-        )
-    )
-
-    # -----------------------------------------------------
-    # Batch
-    # -----------------------------------------------------
-
-    batch_id_raw, batch_name_raw = (
-        fix_batch_values(
-            normalized.get(
-                "batch_id"
-            ),
-
-            normalized.get(
-                "batch_name"
-            ),
-        )
-    )
-
-    # Batch ID optional.
-    # Batch Name alone works.
-
-    batch = find_batch(
-        db=db,
-        batch_id=batch_id_raw,
-        batch_name=batch_name_raw,
-    )
-
-    # -----------------------------------------------------
-    # Resolved batch
-    # -----------------------------------------------------
-
-    if batch is None:
-
-        errors.append(
-            (
-                f"Batch '{batch_name_raw}' "
-                f"/ ID '{batch_id_raw}' "
-                "was not found or inactive"
-            )
-        )
-
-        resolved_batch_id = None
-
-        resolved_batch_name = (
-            batch_name_raw
-            or None
-        )
-
-    else:
-
-        resolved_batch_id = (
-            batch.id
-        )
-
-        resolved_batch_name = (
-            batch.batch_name
-        )
-
-        # If both values supplied,
-        # make sure they match.
-
-        if batch_id_raw:
-
-            try:
-
-                given_batch_id = int(
-                    float(
-                        str(
-                            batch_id_raw
-                        )
-                    )
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-
-                given_batch_id = None
-
-            if (
-                given_batch_id
-                is not None
-                and given_batch_id
-                != batch.id
-            ):
-
-                errors.append(
-                    (
-                        f"Batch ID "
-                        f"{given_batch_id} "
-                        f"does not match "
-                        f"batch '{batch.batch_name}'"
-                    )
-                )
-
-    # -----------------------------------------------------
-    # Monthly Fee
-    # -----------------------------------------------------
-
-    monthly_fee = parse_int_value(
-        normalized.get(
-            "monthly_fee"
-        )
-    )
-
-    # -----------------------------------------------------
-    # Validation
-    # -----------------------------------------------------
+    # =====================================================
+    # REQUIRED VALIDATION
+    # =====================================================
 
     if not full_name:
 
@@ -659,7 +395,13 @@ def normalize_record(
             "Valid date of birth is required"
         )
 
-    if gender not in {
+    if not gender:
+
+        errors.append(
+            "Gender is required"
+        )
+
+    elif gender not in {
         "Male",
         "Female",
         "Other",
@@ -668,23 +410,6 @@ def normalize_record(
         errors.append(
             "Gender must be Male, Female, or Other"
         )
-
-    if blood_group:
-
-        if blood_group not in {
-            "A+",
-            "A-",
-            "B+",
-            "B-",
-            "AB+",
-            "AB-",
-            "O+",
-            "O-",
-        }:
-
-            errors.append(
-                "Invalid blood group"
-            )
 
     if not parent_name:
 
@@ -710,24 +435,6 @@ def normalize_record(
             "Phone number must contain at least 10 digits"
         )
 
-    if not emergency_contact:
-
-        errors.append(
-            "Emergency contact is required"
-        )
-
-    elif len(
-        re.sub(
-            r"\D",
-            "",
-            emergency_contact,
-        )
-    ) < 10:
-
-        errors.append(
-            "Emergency contact must contain at least 10 digits"
-        )
-
     if (
         monthly_fee is None
         or monthly_fee <= 0
@@ -737,29 +444,63 @@ def normalize_record(
             "Monthly fee must be greater than 0"
         )
 
-    # -----------------------------------------------------
-    # JOIN DATE
-    #
-    # If missing → today
-    # -----------------------------------------------------
+    # =====================================================
+    # OPTIONAL VALIDATION
+    # =====================================================
 
-    if join_date is None:
+    if blood_group:
 
-        join_date = date.today()
+        if blood_group not in {
+            "A+",
+            "A-",
+            "B+",
+            "B-",
+            "AB+",
+            "AB-",
+            "O+",
+            "O-",
+        }:
 
-        warnings.append(
-            "Join date was not provided. "
-            "Today's date was used."
+            errors.append(
+                "Invalid blood group"
+            )
+
+    if emergency_contact:
+
+        emergency_digits = re.sub(
+            r"\D",
+            "",
+            emergency_contact,
         )
 
-    # -----------------------------------------------------
-    # Duplicate preview warning
-    # -----------------------------------------------------
+        if len(
+            emergency_digits
+        ) < 10:
+
+            errors.append(
+                "Emergency contact must contain at least 10 digits"
+            )
+
+    # =====================================================
+    # JOIN DATE
+    # =====================================================
+    #
+    # Optional.
+    # Keep null during preview.
+    # Confirm API defaults to today.
+    #
+    # =====================================================
+
+    # =====================================================
+    # DUPLICATE CHECK
+    # =====================================================
 
     if phone_number:
 
         duplicate = (
-            db.query(Student)
+            db.query(
+                Student
+            )
             .filter(
                 Student.phone_number
                 == phone_number
@@ -776,31 +517,25 @@ def normalize_record(
                 )
             )
 
-    # -----------------------------------------------------
-    # Status
-    # -----------------------------------------------------
+    # =====================================================
+    # STATUS
+    # =====================================================
 
     if errors:
 
-        record_status = (
-            "invalid"
-        )
+        status = "invalid"
 
     elif warnings:
 
-        record_status = (
-            "warning"
-        )
+        status = "warning"
 
     else:
 
-        record_status = (
-            "valid"
-        )
+        status = "valid"
 
-    # -----------------------------------------------------
-    # Final normalized data
-    # -----------------------------------------------------
+    # =====================================================
+    # RETURN
+    # =====================================================
 
     return {
 
@@ -815,12 +550,6 @@ def normalize_record(
 
         "blood_group":
             blood_group,
-
-        "batch_id":
-            resolved_batch_id,
-
-        "batch_name":
-            resolved_batch_name,
 
         "join_date":
             join_date,
@@ -841,7 +570,7 @@ def normalize_record(
             avatar_uri,
 
         "status":
-            record_status,
+            status,
 
         "errors":
             errors,
@@ -860,7 +589,7 @@ def parse_xlsx(
 ):
 
     workbook = load_workbook(
-        filename=file_path,
+        file_path,
         data_only=True,
     )
 
@@ -876,8 +605,11 @@ def parse_xlsx(
         return []
 
     headers = [
-        clean_text(value)
-        for value in rows[0]
+        clean_text(
+            value
+        )
+        for value
+        in rows[0]
     ]
 
     records = []
@@ -889,7 +621,8 @@ def parse_xlsx(
                 None,
                 "",
             )
-            for value in row
+            for value
+            in row
         ):
             continue
 
@@ -931,8 +664,8 @@ def parse_csv(
         newline="",
     ) as file:
 
-        reader = (
-            csv.DictReader(file)
+        reader = csv.DictReader(
+            file
         )
 
         return [
@@ -958,7 +691,10 @@ def parse_docx(
         file_path
     )
 
-    # First: actual table
+    # -----------------------------------------------------
+    # TABLE
+    # -----------------------------------------------------
+
     for table in document.tables:
 
         if not table.rows:
@@ -1008,10 +744,12 @@ def parse_docx(
             )
 
         if records:
-
             return records
 
-    # Otherwise paragraphs
+    # -----------------------------------------------------
+    # TEXT
+    # -----------------------------------------------------
+
     text = "\n".join(
         paragraph.text
         for paragraph
@@ -1025,7 +763,7 @@ def parse_docx(
 
 
 # =========================================================
-# TEXT
+# TEXT PARSER
 # =========================================================
 
 def parse_text_records(
@@ -1060,84 +798,6 @@ def parse_text_records(
     if not lines:
         return []
 
-    # -----------------------------------------------------
-    # Excel pasted as TAB-separated
-    # -----------------------------------------------------
-
-    first_parts = re.split(
-        r"\t+|\|",
-        lines[0],
-    )
-
-    mapped_headers = [
-        map_field_name(
-            item
-        )
-        for item
-        in first_parts
-    ]
-
-    if (
-        len(mapped_headers)
-        >= 5
-        and sum(
-            item is not None
-            for item
-            in mapped_headers
-        )
-        >= 5
-    ):
-
-        records = []
-
-        for line in lines[1:]:
-
-            parts = re.split(
-                r"\t+|\|",
-                line,
-            )
-
-            if len(parts) < 5:
-                continue
-
-            record = {}
-
-            for index, value in enumerate(
-                parts
-            ):
-
-                if (
-                    index
-                    >= len(
-                        mapped_headers
-                    )
-                ):
-                    break
-
-                field_name = (
-                    mapped_headers[index]
-                )
-
-                if field_name:
-
-                    record[
-                        field_name
-                    ] = value.strip()
-
-            if record:
-
-                records.append(
-                    record
-                )
-
-        if records:
-
-            return records
-
-    # -----------------------------------------------------
-    # Key/value blocks
-    # -----------------------------------------------------
-
     records = []
 
     current = {}
@@ -1148,7 +808,10 @@ def parse_text_records(
 
     for line in lines:
 
+        # -------------------------------------------------
         # Student 1 / Student 2
+        # -------------------------------------------------
+
         if re.match(
             r"^student\s*\d+",
             line,
@@ -1171,29 +834,30 @@ def parse_text_records(
             )
         )
 
-        if match:
+        if not match:
+            continue
 
-            raw_key = (
-                match.group(1)
-                .strip()
+        raw_key = (
+            match.group(1)
+            .strip()
+        )
+
+        value = (
+            match.group(2)
+            .strip()
+        )
+
+        field_name = (
+            map_field_name(
+                raw_key
             )
+        )
 
-            raw_value = (
-                match.group(2)
-                .strip()
-            )
+        if field_name:
 
-            field_name = (
-                map_field_name(
-                    raw_key
-                )
-            )
-
-            if field_name:
-
-                current[
-                    field_name
-                ] = raw_value
+            current[
+                field_name
+            ] = value
 
     if current:
 
@@ -1292,12 +956,7 @@ def parse_image(
     except Exception as exc:
 
         raise ValueError(
-            (
-                "OCR failed. "
-                "Install Tesseract OCR "
-                "and add it to PATH. "
-                f"Details: {exc}"
-            )
+            f"OCR failed: {exc}"
         ) from exc
 
     if not text.strip():
@@ -1322,8 +981,7 @@ def parse_pdf(
     if PdfReader is None:
 
         raise ValueError(
-            "PDF support requires pypdf. "
-            "Run: pip install pypdf"
+            "Install pypdf for PDF support"
         )
 
     reader = PdfReader(
@@ -1352,8 +1010,7 @@ def parse_pdf(
     if not text.strip():
 
         raise ValueError(
-            "No text could be extracted from PDF. "
-            "For scanned PDFs, upload the page as PNG/JPG."
+            "No text found in PDF"
         )
 
     return parse_text_records(
@@ -1362,7 +1019,7 @@ def parse_pdf(
 
 
 # =========================================================
-# MAIN PARSER
+# MAIN FILE PARSER
 # =========================================================
 
 def parse_file(
@@ -1376,21 +1033,25 @@ def parse_file(
     )
 
     if extension == ".xlsx":
+
         return parse_xlsx(
             file_path
         )
 
     if extension == ".csv":
+
         return parse_csv(
             file_path
         )
 
     if extension == ".docx":
+
         return parse_docx(
             file_path
         )
 
     if extension == ".txt":
+
         return parse_txt(
             file_path
         )
@@ -1401,17 +1062,21 @@ def parse_file(
         ".png",
         ".webp",
     }:
+
         return parse_image(
             file_path
         )
 
     if extension == ".pdf":
+
         return parse_pdf(
             file_path
         )
 
     raise ValueError(
-        "Unsupported file type. "
-        "Supported: XLSX, CSV, DOCX, TXT, PDF, "
-        "JPG, JPEG, PNG, WEBP"
+        (
+            "Unsupported file type. "
+            "Supported: XLSX, CSV, DOCX, TXT, "
+            "PDF, JPG, JPEG, PNG, WEBP"
+        )
     )

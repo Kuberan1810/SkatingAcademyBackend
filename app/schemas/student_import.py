@@ -1,14 +1,22 @@
 from datetime import date
-from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
+# =========================================================
+# IMPORT STUDENT RECORD
+# =========================================================
+
 class ImportStudentRecord(BaseModel):
 
+    # Automatically generated during preview
     row_number: int = Field(
         ge=1
     )
+
+    # =====================================================
+    # REQUIRED
+    # =====================================================
 
     full_name: str
 
@@ -16,31 +24,29 @@ class ImportStudentRecord(BaseModel):
 
     gender: str
 
-    blood_group: str | None = None
-
-    # Batch ID is OPTIONAL.
-    # Batch name alone is enough.
-    batch_id: int | None = None
-
-    batch_name: str | None = None
-
-    join_date: date
-
     parent_name: str
 
     phone_number: str
 
-    emergency_contact: str
-
     monthly_fee: int
+
+    # =====================================================
+    # OPTIONAL
+    # =====================================================
+
+    blood_group: str | None = None
+
+    emergency_contact: str | None = None
+
+    join_date: date | None = None
 
     avatar_uri: str | None = None
 
-    status: Literal[
-        "valid",
-        "warning",
-        "invalid",
-    ]
+    # =====================================================
+    # PREVIEW
+    # =====================================================
+
+    status: str
 
     errors: list[str] = Field(
         default_factory=list
@@ -51,7 +57,16 @@ class ImportStudentRecord(BaseModel):
     )
 
 
+# =========================================================
+# CONFIRM REQUEST
+# =========================================================
+
 class StudentImportConfirmRequest(BaseModel):
+
+    # User selects this from batch dropdown
+    batch_id: int = Field(
+        gt=0
+    )
 
     students: list[
         ImportStudentRecord

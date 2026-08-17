@@ -1,18 +1,17 @@
 import os
 import tempfile
+from datetime import date
 
 from fastapi import (
     APIRouter,
+    Body,
     Depends,
     File,
     HTTPException,
     UploadFile,
 )
 
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from fastapi import Body  
-
 
 from app.auth.dependencies import (
     get_current_admin,
@@ -46,7 +45,7 @@ router = APIRouter(
 
 
 # =========================================================
-# FILE TYPES
+# SUPPORTED FILES
 # =========================================================
 
 ALLOWED_EXTENSIONS = {
@@ -61,14 +60,13 @@ ALLOWED_EXTENSIONS = {
     ".webp",
 }
 
-
 MAX_FILE_SIZE = (
     10 * 1024 * 1024
 )
 
 
 # =========================================================
-# COMMON PREVIEW RESPONSE
+# PREVIEW RESPONSE BUILDER
 # =========================================================
 
 def build_preview_response(
@@ -157,9 +155,7 @@ def preview_student_import(
 
         raise HTTPException(
             status_code=400,
-            detail=(
-                "File name is required"
-            ),
+            detail="File name is required",
         )
 
     extension = (
@@ -217,35 +213,20 @@ def preview_student_import(
                 temp_file.name
             )
 
-        try:
-
-            raw_records = parse_file(
-                temp_path
-            )
-
-        except Exception as exc:
-
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Unable to read file: "
-                    f"{str(exc)}"
-                ),
-            ) from exc
+        raw_records = parse_file(
+            temp_path
+        )
 
         if not raw_records:
 
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "No student records "
-                    "were found in the file"
+                    "No student records found"
                 ),
             )
 
         students = []
-
-        
 
         for index, raw_record in enumerate(
             raw_records,
@@ -257,7 +238,9 @@ def preview_student_import(
                 db,
             )
 
-            normalized["row_number"] = index
+            normalized[
+                "row_number"
+            ] = index
 
             students.append(
                 normalized
@@ -272,6 +255,16 @@ def preview_student_import(
                 "",
             ),
         )
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+
+        raise HTTPException(
+            status_code=400,
+            detail=str(exc),
+        ) from exc
 
     finally:
 
@@ -288,78 +281,90 @@ def preview_student_import(
 
 
 # =========================================================
-# COPY / PASTE TEXT
+# TEXT PREVIEW
 # =========================================================
-
-
-class StudentImportTextRequest(
-    BaseModel
-):
-
-    text: str
-
 
 @router.post(
     "/text/preview",
-    summary="Preview Student Import Text",
 )
 def preview_student_import_text(
+
     text: str = Body(
         ...,
         media_type="text/plain",
-        description="Paste student data in any supported text format",
     ),
-    db: Session = Depends(get_db),
+
+    db: Session = Depends(
+        get_db
+    ),
+
     current_admin: Admin = Depends(
         get_current_admin
     ),
 ):
+
     if not text.strip():
+
         raise HTTPException(
             status_code=400,
             detail="Text input is empty",
         )
 
     try:
-        raw_records = parse_text_records(
-            text
+
+        raw_records = (
+            parse_text_records(
+                text
+            )
         )
+
+        if not raw_records:
+
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "No student records found"
+                ),
+            )
+
+        students = []
+
+        for index, raw_record in enumerate(
+            raw_records,
+            start=2,
+        ):
+
+            normalized = normalize_record(
+                raw_record,
+                db,
+            )
+
+            normalized[
+                "row_number"
+            ] = index
+
+            students.append(
+                normalized
+            )
+
+        return build_preview_response(
+            students,
+            source="text",
+        )
+
+    except HTTPException:
+        raise
+
     except Exception as exc:
+
         raise HTTPException(
             status_code=400,
-            detail=f"Unable to parse text: {exc}",
+            detail=str(exc),
         ) from exc
 
-    if not raw_records:
-        raise HTTPException(
-            status_code=400,
-            detail="No student records found in the provided text",
-        )
-
-    students = []
-
-    for index, raw_record in enumerate(
-        raw_records,
-        start=2,
-    ):
-        normalized = normalize_record(
-            raw_record,
-            db,
-        )
-
-        normalized["row_number"] = index
-
-        students.append(
-            normalized
-        )
-
-    return build_preview_response(
-        students,
-        source="text",
-    )
 
 # =========================================================
-# CONFIRM IMPORT
+# CONFIRM
 # =========================================================
 
 @router.post(
@@ -379,28 +384,48 @@ def confirm_student_import(
     ),
 ):
 
-    if not request.students:
+    # =====================================================
+    # VERIFY SELECTED BATCH
+    # =====================================================
 
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "No students to import"
+    batch = (
+        db.query(
+            Batch
+        )
+        .filter(
+            Batch.id
+            == request.batch_id,
+
+            Batch.is_active.is_(
+                True
             ),
         )
+        .first()
+    )
+
+    if batch is None:
+
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "Selected batch "
+                "not found or inactive"
+            ),
+        )
+
+    # =====================================================
+    # RESULTS
+    # =====================================================
 
     created = []
 
     failed = []
 
     # =====================================================
-    # PROCESS
+    # PROCESS STUDENTS
     # =====================================================
 
     for record in request.students:
-
-        # -------------------------------------------------
-        # Only valid / warning records
-        # -------------------------------------------------
 
         if record.status not in {
             "valid",
@@ -431,65 +456,13 @@ def confirm_student_import(
         try:
 
             # =============================================
-            # BATCH RESOLUTION
-            # =============================================
-
-            batch = None
-
-            # First ID
-            if (
-                record.batch_id
-                is not None
-            ):
-
-                batch = (
-                    db.query(Batch)
-                    .filter(
-                        Batch.id
-                        == record.batch_id,
-
-                        Batch.is_active.is_(
-                            True
-                        ),
-                    )
-                    .first()
-                )
-
-            # Fallback name
-            if (
-                batch is None
-                and record.batch_name
-            ):
-
-                batch = (
-                    db.query(Batch)
-                    .filter(
-                        Batch.batch_name.ilike(
-                            record.batch_name.strip()
-                        ),
-
-                        Batch.is_active.is_(
-                            True
-                        ),
-                    )
-                    .first()
-                )
-
-            if batch is None:
-
-                raise ValueError(
-                    (
-                        "Batch not found "
-                        "or inactive"
-                    )
-                )
-
-            # =============================================
-            # DUPLICATE PHONE
+            # DUPLICATE CHECK
             # =============================================
 
             duplicate = (
-                db.query(Student)
+                db.query(
+                    Student
+                )
                 .filter(
                     Student.phone_number
                     == record.phone_number
@@ -499,16 +472,41 @@ def confirm_student_import(
 
             if duplicate:
 
-                raise ValueError(
-                    (
-                        "Student already exists "
-                        "with phone number "
-                        f"{record.phone_number}"
-                    )
+                failed.append(
+                    {
+                        "row_number":
+                            record.row_number,
+
+                        "full_name":
+                            record.full_name,
+
+                        "status":
+                            "failed",
+
+                        "errors":
+                            [
+                                (
+                                    "Student already exists "
+                                    "with phone number "
+                                    f"{record.phone_number}"
+                                )
+                            ],
+                    }
                 )
 
+                continue
+
             # =============================================
-            # CREATE STUDENT
+            # JOIN DATE
+            # =============================================
+
+            final_join_date = (
+                record.join_date
+                or date.today()
+            )
+
+            # =============================================
+            # CREATE
             # =============================================
 
             student = Student(
@@ -525,11 +523,12 @@ def confirm_student_import(
                 blood_group=
                     record.blood_group,
 
+                # Selected batch
                 batch_id=
                     batch.id,
 
                 join_date=
-                    record.join_date,
+                    final_join_date,
 
                 parent_name=
                     record.parent_name,
@@ -545,6 +544,8 @@ def confirm_student_import(
 
                 avatar_uri=
                     record.avatar_uri,
+
+                is_active=True,
             )
 
             db.add(
@@ -628,6 +629,15 @@ def confirm_student_import(
             "Student import completed",
 
         "data": {
+
+            "batch": {
+
+                "id":
+                    batch.id,
+
+                "batch_name":
+                    batch.batch_name,
+            },
 
             "total_records":
                 len(
