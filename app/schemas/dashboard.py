@@ -109,6 +109,10 @@ class UpcomingSessionItem(BaseModel):
 
     students_count: int
 
+    status: str | None = "start"
+
+    time_of_day: str | None = "Morning"
+
 
 class UpcomingSessions(BaseModel):
 

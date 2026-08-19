@@ -1627,12 +1627,7 @@ def get_student_report(
             # DUE DATE
             # ---------------------------------------------
 
-            due_day = min(
-                student.join_date.day
-                if student.join_date
-                else 1,
-                28,
-            )
+            due_day = 1
 
             due_date = date(
                 current_year,

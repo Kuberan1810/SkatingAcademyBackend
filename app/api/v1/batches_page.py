@@ -213,8 +213,22 @@ def get_batches_page(
     )
 
     # =====================================================
-    # TODAY'S SESSIONS
+    # TODAY'S SESSIONS & SCHEDULED BATCHES
     # =====================================================
+
+    today_weekday_name = today.strftime("%A").lower()
+
+    active_batches_list = (
+        db.query(Batch)
+        .filter(Batch.is_active.is_(True))
+        .all()
+    )
+
+    today_scheduled_batches = []
+    for b in active_batches_list:
+        days = {str(d).strip().lower() for d in (b.training_days or []) if d}
+        if today_weekday_name in days:
+            today_scheduled_batches.append(b)
 
     today_sessions = (
         db.query(SessionModel)
@@ -224,9 +238,7 @@ def get_batches_page(
         .all()
     )
 
-    scheduled_sessions = len(
-        today_sessions
-    )
+    scheduled_sessions = max(len(today_scheduled_batches), len(today_sessions))
 
     completed_sessions = sum(
         1
@@ -234,33 +246,13 @@ def get_batches_page(
         if session.status == "COMPLETED"
     )
 
-    active_sessions = sum(
-        1
-        for session in today_sessions
-        if session.status == "LIVE"
-    )
+    active_sessions = max(0, scheduled_sessions - completed_sessions)
 
     # =====================================================
-    # TODAY'S EXPECTED STUDENTS
+    # TODAY'S EXPECTED STUDENTS (Total Active Students)
     # =====================================================
 
-    total_expected = 0
-
-    for session in today_sessions:
-
-        student_count = (
-            db.query(
-                func.count(Student.id)
-            )
-            .filter(
-                Student.batch_id == session.batch_id,
-                Student.is_active.is_(True),
-            )
-            .scalar()
-            or 0
-        )
-
-        total_expected += student_count
+    total_expected = total_students
 
     # =====================================================
     # TODAY'S PRESENT STUDENTS
@@ -281,7 +273,7 @@ def get_batches_page(
         )
         .filter(
             SessionModel.session_date == today,
-            Attendance.status == "Present",
+            func.lower(Attendance.status) == "present",
         )
         .scalar()
         or 0

@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import settings
@@ -42,6 +43,26 @@ from app.api.v1.pending_fees import router as pending_fees_router
 app = FastAPI(
     title="Skating Academy API",
     version="1.0.0",
+)
+
+# =========================================================
+# CORS MIDDLEWARE CONTROL
+# =========================================================
+
+origins = [
+    "http://localhost:8081",
+    "http://localhost:19006",
+    "http://localhost:8000",
+    "http://127.0.0.1:8081",
+    "*",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 

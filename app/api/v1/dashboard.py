@@ -93,7 +93,6 @@ def get_next_training_date(
     training_days,
     start_time,
 ):
-
     if not training_days:
         return None
 
@@ -114,20 +113,11 @@ def get_next_training_date(
     ]
 
     for offset in range(0, 8):
-
         candidate_date = today + timedelta(days=offset)
-
         candidate_day = weekdays[candidate_date.weekday()]
 
-        if candidate_day not in normalized_training_days:
-            continue
-
-        if offset == 0:
-            if current_time < start_time:
-                return candidate_date
-            continue
-
-        return candidate_date
+        if candidate_day in normalized_training_days:
+            return candidate_date
 
     return None
 
@@ -271,6 +261,21 @@ def get_dashboard(
     # 5. TODAY'S SESSIONS
     # =====================================================
 
+    today_weekday_name = today.strftime("%A").lower()
+
+    active_batches = (
+        db.query(Batch)
+        .filter(Batch.is_active.is_(True))
+        .order_by(Batch.start_time.asc())
+        .all()
+    )
+
+    today_scheduled_batches = []
+    for batch in active_batches:
+        days = {str(d).strip().lower() for d in (batch.training_days or []) if d}
+        if today_weekday_name in days:
+            today_scheduled_batches.append(batch)
+
     today_sessions = (
         db.query(SessionModel)
         .filter(
@@ -282,9 +287,7 @@ def get_dashboard(
         .all()
     )
 
-    scheduled_sessions = len(
-        today_sessions
-    )
+    scheduled_sessions = max(len(today_scheduled_batches), len(today_sessions))
 
     completed_sessions = sum(
         1
@@ -292,33 +295,13 @@ def get_dashboard(
         if session.status == "COMPLETED"
     )
 
-    active_sessions = sum(
-        1
-        for session in today_sessions
-        if session.status == "LIVE"
-    )
+    active_sessions = max(0, scheduled_sessions - completed_sessions)
 
     # =====================================================
-    # 6. TODAY'S EXPECTED STUDENTS
+    # 6. TODAY'S EXPECTED STUDENTS (Total Active Students)
     # =====================================================
 
-    total_expected = 0
-
-    for session in today_sessions:
-
-        student_count = (
-            db.query(
-                func.count(Student.id)
-            )
-            .filter(
-                Student.batch_id == session.batch_id,
-                Student.is_active.is_(True),
-            )
-            .scalar()
-            or 0
-        )
-
-        total_expected += student_count
+    total_expected = total_students
 
     # =====================================================
     # 7. TODAY'S PRESENT STUDENTS
@@ -339,7 +322,7 @@ def get_dashboard(
         )
         .filter(
             SessionModel.session_date == today,
-            Attendance.status == "Present",
+            func.lower(Attendance.status) == "present",
         )
         .scalar()
         or 0
@@ -494,10 +477,7 @@ def get_dashboard(
         # student's join-date day
         # ---------------------------------------------
 
-        due_day = min(
-            student.join_date.day,
-            28,
-        )
+        due_day = 1
 
         due_date = today.replace(
             day=due_day
@@ -539,7 +519,11 @@ def get_dashboard(
                     ),
 
                 "amount":
-                    batch.monthly_fee,
+                    int(
+                        student.monthly_fee
+                        if (student.monthly_fee is not None and student.monthly_fee > 0)
+                        else (batch.monthly_fee or 0)
+                    ),
 
                 "status":
                     fee_status,
@@ -572,116 +556,99 @@ def get_dashboard(
     # Batch.training_days
     # Batch.start_time
     # Batch.end_time
-    #
-    # No future SessionModel rows are created.
+    # =====================================================
+    # 14. UPCOMING SESSIONS
     # =====================================================
 
     upcoming_session_items = []
-
     now = datetime.now()
     current_time = now.time()
 
-    active_batches = (
-        db.query(Batch)
-        .filter(Batch.is_active.is_(True))
-        .order_by(Batch.start_time.asc())
-        .all()
-    )
+    # Prioritize TODAY if any batches are scheduled for today
+    if today_scheduled_batches:
+        target_date = today
+    else:
+        candidate_dates = []
+        for batch in active_batches:
+            next_date = get_next_training_date(
+                today=today,
+                current_time=current_time,
+                training_days=batch.training_days,
+                start_time=batch.start_time,
+            )
+            if next_date is not None:
+                candidate_dates.append(next_date)
+        target_date = min(candidate_dates) if candidate_dates else today
 
-    candidate_dates = []
+    target_weekday = target_date.strftime("%A").lower()
 
     for batch in active_batches:
+        training_days = batch.training_days or []
+        normalized_training_days = {
+            str(day).strip().lower()
+            for day in training_days
+            if day
+        }
 
-        next_date = get_next_training_date(
-            today=today,
-            current_time=current_time,
-            training_days=batch.training_days,
-            start_time=batch.start_time,
+        if target_weekday not in normalized_training_days:
+            continue
+
+        student_count = (
+            db.query(func.count(Student.id))
+            .filter(
+                Student.batch_id == batch.id,
+                Student.is_active.is_(True),
+            )
+            .scalar()
+            or 0
         )
 
-        if next_date is not None:
-            candidate_dates.append(next_date)
+        existing_session = get_today_batch_session(
+            db=db,
+            batch_id=batch.id,
+            today=target_date,
+        )
 
-    if candidate_dates:
-        upcoming_date = min(candidate_dates)
-    else:
-        upcoming_date = None
+        if existing_session is not None:
+            if existing_session.status == "COMPLETED":
+                session_status = "completed"
+            elif existing_session.status == "LIVE":
+                session_status = "live"
+            else:
+                session_status = "start"
+            session_id = str(existing_session.id)
+        else:
+            session_status = "start"
+            session_id = str(batch.id)
 
-    if upcoming_date is not None:
+        time_label = format_session_time(
+            batch.start_time,
+            batch.end_time,
+        )
 
-        upcoming_weekday = upcoming_date.strftime("%A").lower()
-
-        for batch in active_batches:
-
-            training_days = batch.training_days or []
-
-            normalized_training_days = {
-                str(day).strip().lower()
-                for day in training_days
-                if day
+        upcoming_session_items.append(
+            {
+                "id": session_id,
+                "batch_id": batch.id,
+                "batch_name": batch.batch_name,
+                "class_type": batch.class_type,
+                "location": batch.location,
+                "date": target_date.isoformat(),
+                "day": target_date.strftime("%A"),
+                "start_time": batch.start_time.strftime("%I:%M %p").lstrip("0"),
+                "end_time": batch.end_time.strftime("%I:%M %p").lstrip("0"),
+                "time": time_label,
+                "students_count": student_count,
+                "status": session_status,
+                "time_of_day": get_time_of_day(batch.start_time),
             }
-
-            if upcoming_weekday not in normalized_training_days:
-                continue
-
-            student_count = (
-                db.query(func.count(Student.id))
-                .filter(
-                    Student.batch_id == batch.id,
-                    Student.is_active.is_(True),
-                )
-                .scalar()
-                or 0
-            )
-
-            existing_session = None
-
-            if upcoming_date == today:
-                existing_session = get_today_batch_session(
-                    db=db,
-                    batch_id=batch.id,
-                    today=today,
-                )
-
-                if (
-                    existing_session is not None
-                    and existing_session.status == "COMPLETED"
-                ):
-                    continue
-
-            time_label = format_session_time(
-                batch.start_time,
-                batch.end_time,
-            )
-
-            upcoming_session_items.append(
-                {
-                    "id": str(
-                        existing_session.id
-                        if existing_session is not None
-                        else batch.id
-                    ),
-                    "batch_id": batch.id,
-                    "batch_name": batch.batch_name,
-                    "class_type": batch.class_type,
-                    "location": batch.location,
-                    "date": upcoming_date.isoformat(),
-                    "day": upcoming_date.strftime("%A"),
-                    "start_time": batch.start_time.strftime("%I:%M %p").lstrip("0"),
-                    "end_time": batch.end_time.strftime("%I:%M %p").lstrip("0"),
-                    "time": time_label,
-                    "students_count": student_count,
-                }
-            )
+        )
 
     upcoming_session_items.sort(
         key=lambda item: item["start_time"]
     )
 
-    if upcoming_date is not None:
-        display_date = upcoming_date.strftime("%A, %d %b, %Y")
-    else:
-        display_date = None
+    display_date = target_date.strftime("%A, %d %b, %Y")
 
     # =====================================================
     # 16. FINAL RESPONSE

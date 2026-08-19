@@ -137,10 +137,31 @@ class FeePageStudent(BaseModel):
 
 class RecentPayment(BaseModel):
     id: str
+    student_id: int | None = None
     name: str
     time_ago_or_date: str
     payment_method: str
     amount: int
+
+
+class RecentPaymentDetail(BaseModel):
+    id: str
+    student_id: int
+    name: str
+    avatar_uri: str | None = None
+    batch_name: str | None = None
+    time_ago_or_date: str
+    payment_date: str | None = None
+    payment_method: str
+    amount: int
+    fee_month: int | None = None
+    fee_year: int | None = None
+
+
+class RecentPaymentsResponse(BaseModel):
+    status: str
+    message: str
+    data: list[RecentPaymentDetail]
 
 
 # =========================================================

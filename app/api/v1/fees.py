@@ -1,5 +1,6 @@
 import calendar
 import uuid
+from datetime import date, datetime
 
 from fastapi import (
     APIRouter,
@@ -22,22 +23,9 @@ from app.models.student import Student
 from app.schemas.fee import (
     FeeCollect,
     FeeCollectResponse,
+    FeePageResponse,
+    RecentPaymentsResponse,
 )
-from datetime import date, datetime
-
-from fastapi import APIRouter, Depends
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from app.auth.dependencies import get_current_admin
-from app.core.dependencies import get_db
-
-from app.models.admin import Admin
-from app.models.student import Student
-from app.models.batch import Batch
-from app.models.fee import FeePayment
-
-from app.schemas.fee import FeePageResponse
 
 
 router = APIRouter(
@@ -290,6 +278,84 @@ def collect_fee(
 
 
 # =========================================================
+# GET RECENT PAYMENTS
+# =========================================================
+
+@router.get(
+    "/recent",
+    response_model=RecentPaymentsResponse,
+)
+def get_recent_payments(
+    limit: int = 20,
+    db: Session = Depends(get_db),
+    current_admin: Admin = Depends(get_current_admin),
+):
+    recent_payment_records = (
+        db.query(
+            FeePayment,
+            Student.full_name,
+            Student.avatar_uri,
+            Batch.batch_name,
+        )
+        .join(
+            Student,
+            FeePayment.student_id == Student.id,
+        )
+        .outerjoin(
+            Batch,
+            Student.batch_id == Batch.id,
+        )
+        .order_by(
+            FeePayment.payment_date.desc()
+        )
+        .limit(limit)
+        .all()
+    )
+
+    now = datetime.now()
+    results = []
+
+    for payment, student_name, avatar_uri, batch_name in recent_payment_records:
+        payment_date = payment.payment_date
+        if payment_date.tzinfo is not None:
+            payment_date = payment_date.replace(tzinfo=None)
+
+        difference = now - payment_date
+        total_seconds = difference.total_seconds()
+        total_hours = int(total_seconds // 3600)
+        total_minutes = int(total_seconds // 60)
+
+        if total_minutes < 60:
+            time_label = "1 min ago" if total_minutes <= 1 else f"{total_minutes} min ago"
+        elif total_hours < 24:
+            time_label = "1 hr ago" if total_hours == 1 else f"{total_hours} hr ago"
+        else:
+            time_label = payment_date.strftime("%d/%m/%Y")
+
+        results.append(
+            {
+                "id": str(payment.id),
+                "student_id": payment.student_id,
+                "name": student_name,
+                "avatar_uri": avatar_uri,
+                "batch_name": batch_name,
+                "time_ago_or_date": time_label,
+                "payment_date": payment_date.strftime("%Y-%m-%d"),
+                "payment_method": payment.payment_method,
+                "amount": int(payment.net_payable),
+                "fee_month": payment.fee_month,
+                "fee_year": payment.fee_year,
+            }
+        )
+
+    return {
+        "status": "success",
+        "message": "Recent payments fetched successfully",
+        "data": results,
+    }
+
+
+# =========================================================
 # GET FEES PAGE
 # =========================================================
 
@@ -489,10 +555,7 @@ def get_fees_page(
             # FEE DUE DATE
             # ---------------------------------------------
 
-            due_day = min(
-                student.join_date.day,
-                28,
-            )
+            due_day = 1
 
             due_date = date(
                 current_year,
@@ -674,6 +737,9 @@ def get_fees_page(
             {
                 "id":
                     str(payment.id),
+
+                "student_id":
+                    payment.student_id,
 
                 "name":
                     student_name,

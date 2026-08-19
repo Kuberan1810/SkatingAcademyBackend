@@ -1209,12 +1209,7 @@ def export_student_report(
 
             pending_amount = monthly_fee
 
-            due_day = min(
-                student.join_date.day
-                if student.join_date
-                else 1,
-                28,
-            )
+            due_day = 1
 
             due_date = date(
                 current_year,

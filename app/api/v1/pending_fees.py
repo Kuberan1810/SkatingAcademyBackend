@@ -154,7 +154,9 @@ def get_pending_fees(
         # =================================================
 
         monthly_fee = int(
-            batch.monthly_fee or 0
+            student.monthly_fee
+            if (student.monthly_fee is not None and student.monthly_fee > 0)
+            else (batch.monthly_fee or 0)
         )
 
         if monthly_fee <= 0:
@@ -224,10 +226,7 @@ def get_pending_fees(
         # Same logic as your existing fee API
         # =================================================
 
-        due_day = min(
-            student.join_date.day,
-            28,
-        )
+        due_day = 1
 
         due_date = date(
             current_year,

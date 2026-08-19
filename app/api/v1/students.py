@@ -487,7 +487,9 @@ def get_all_students_page(
         else:
 
             amount = int(
-                batch.monthly_fee
+                student.monthly_fee
+                if (student.monthly_fee is not None and student.monthly_fee > 0)
+                else (batch.monthly_fee or 0)
             )
 
             paid_date = None
@@ -496,10 +498,7 @@ def get_all_students_page(
             # DUE DATE
             # ---------------------------------------------
 
-            due_day = min(
-                student.join_date.day,
-                28,
-            )
+            due_day = 1
 
             due_date = date(
                 current_year,
@@ -1045,10 +1044,7 @@ def get_student_profile(
     # 16. PAYMENT DUE DATE
     # =====================================================
 
-    due_day = min(
-        student.join_date.day,
-        28,
-    )
+    due_day = 1
 
     due_date = date(
         current_year,
