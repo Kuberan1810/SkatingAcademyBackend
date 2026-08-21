@@ -9,8 +9,10 @@ from fastapi import (
     status,
 )
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+
 
 from app.auth.dependencies import get_current_admin
 from app.core.dependencies import get_db
