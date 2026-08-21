@@ -94,12 +94,13 @@ def create_student(
             detail="Student age must be at least 3 years",
         )
 
-    # Auto-resolve monthly fee from batch if not explicitly provided
+    # Auto-resolve monthly fee from batch if not explicitly provided or <= 0
     resolved_monthly_fee = (
         data.monthly_fee
-        if data.monthly_fee is not None
+        if (data.monthly_fee is not None and data.monthly_fee > 0)
         else (batch.monthly_fee or 0)
     )
+
 
     # Create student
     student = Student(

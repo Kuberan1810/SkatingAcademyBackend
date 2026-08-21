@@ -56,8 +56,9 @@ class StudentCreate(BaseModel):
 
     monthly_fee: int | None = Field(
         default=None,
-        gt=0,
+        ge=0,
     )
+
 
 
     avatar_uri: str | None = Field(
