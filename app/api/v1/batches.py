@@ -13,6 +13,8 @@ from app.models.student import Student
 from app.models.session import Session as SessionModel
 from app.models.attendance import Attendance
 from app.models.fee import FeePayment
+from app.models.batch_schedule_exception import BatchScheduleException
+
 
 from app.schemas.batch import (
     BatchCreate,
@@ -707,22 +709,25 @@ def get_next_training_date(
     today: date,
 ) -> date:
 
+    if not training_days:
+        return today
+
     weekday_map = {
-        "Monday": 0,
-        "Tuesday": 1,
-        "Wednesday": 2,
-        "Thursday": 3,
-        "Friday": 4,
-        "Saturday": 5,
-        "Sunday": 6,
+        "monday": 0,
+        "tuesday": 1,
+        "wednesday": 2,
+        "thursday": 3,
+        "friday": 4,
+        "saturday": 5,
+        "sunday": 6,
     }
 
     today_weekday = today.weekday()
 
     valid_weekdays = [
-        weekday_map[day]
+        weekday_map[str(day).strip().lower()]
         for day in training_days
-        if day in weekday_map
+        if str(day).strip().lower() in weekday_map
     ]
 
     if not valid_weekdays:
@@ -833,8 +838,31 @@ def get_batches_page(
     )
 
     # =====================================================
-    # TODAY'S SESSIONS
+    # TODAY'S SESSIONS & SCHEDULED BATCHES
     # =====================================================
+
+    today_weekday_name = today.strftime("%A").lower()
+
+    active_batches_list = (
+        db.query(Batch)
+        .filter(Batch.is_active.is_(True))
+        .all()
+    )
+
+    today_scheduled_batches = []
+    for b in active_batches_list:
+        days = {str(d).strip().lower() for d in (b.training_days or []) if d}
+        is_comp = (
+            db.query(BatchScheduleException)
+            .filter(
+                BatchScheduleException.batch_id == b.id,
+                BatchScheduleException.compensation_date == today,
+                BatchScheduleException.status == "APPROVED",
+            )
+            .first()
+        ) is not None
+        if (today_weekday_name in days) or is_comp:
+            today_scheduled_batches.append(b)
 
     today_sessions = (
         db.query(SessionModel)
@@ -844,9 +872,7 @@ def get_batches_page(
         .all()
     )
 
-    scheduled_sessions = len(
-        today_sessions
-    )
+    scheduled_sessions = max(len(today_scheduled_batches), len(today_sessions))
 
     completed_sessions = sum(
         1
@@ -854,33 +880,13 @@ def get_batches_page(
         if session.status == "COMPLETED"
     )
 
-    active_sessions = sum(
-        1
-        for session in today_sessions
-        if session.status == "LIVE"
-    )
+    active_sessions = max(0, scheduled_sessions - completed_sessions)
 
     # =====================================================
     # TODAY'S EXPECTED STUDENTS
     # =====================================================
 
-    total_expected = 0
-
-    for session in today_sessions:
-
-        student_count = (
-            db.query(
-                func.count(Student.id)
-            )
-            .filter(
-                Student.batch_id == session.batch_id,
-                Student.is_active.is_(True),
-            )
-            .scalar()
-            or 0
-        )
-
-        total_expected += student_count
+    total_expected = total_students
 
     # =====================================================
     # TODAY'S PRESENT STUDENTS
@@ -901,7 +907,7 @@ def get_batches_page(
         )
         .filter(
             SessionModel.session_date == today,
-            Attendance.status == "Present",
+            func.lower(Attendance.status) == "present",
         )
         .scalar()
         or 0
@@ -959,24 +965,41 @@ def get_batches_page(
         )
 
         # =================================================
-        # NEXT TRAINING DATE
+        # TRAINING DAYS & SCHEDULE CHECK
         # =================================================
 
-        training_date = get_next_training_date(
+        batch_days = {
+            str(d).strip().lower()
+            for d in (batch.training_days or [])
+            if d
+        }
+
+        is_compensation_today = (
+            db.query(BatchScheduleException)
+            .filter(
+                BatchScheduleException.batch_id == batch.id,
+                BatchScheduleException.compensation_date == today,
+                BatchScheduleException.status == "APPROVED",
+            )
+            .first()
+        ) is not None
+
+        is_scheduled_today = (today_weekday_name in batch_days) or is_compensation_today
+
+        next_training_date = get_next_training_date(
             batch.training_days,
             today,
         )
 
         # =================================================
-        # TODAY'S SESSION FOR THIS BATCH
+        # TODAY'S SESSION FOR THIS BATCH (STRICTLY TODAY)
         # =================================================
 
-        session = (
+        today_session = (
             db.query(SessionModel)
             .filter(
                 SessionModel.batch_id == batch.id,
-                SessionModel.session_date
-                == training_date,
+                SessionModel.session_date == today,
             )
             .order_by(
                 SessionModel.id.desc()
@@ -985,29 +1008,13 @@ def get_batches_page(
         )
 
         # =================================================
-        # DEFAULT STATUS
+        # 3 STATUSES: live, completed, no_class
         # =================================================
 
-        if training_date != today:
-
-            batch_status = "upcoming"
-
-            attendance_value = None
-
-        elif session is None:
-
-            batch_status = "upcoming"
-
-            attendance_value = None
-
-        elif session.status == "COMPLETED":
+        if today_session is not None and today_session.status == "COMPLETED":
 
             batch_status = "completed"
 
-            # ---------------------------------------------
-            # Attendance for this session
-            # ---------------------------------------------
-
             present_count = (
                 db.query(
                     func.count(
@@ -1018,7 +1025,7 @@ def get_batches_page(
                 )
                 .filter(
                     Attendance.session_id
-                    == session.id,
+                    == today_session.id,
 
                     Attendance.status
                     == "Present",
@@ -1032,40 +1039,60 @@ def get_batches_page(
                 f"{student_count}"
             )
 
-        elif session.status == "LIVE":
+            session_id_str = str(today_session.id)
+
+            date_label = today.strftime("%d %b %Y")
+
+        elif (today_session is not None and today_session.status == "LIVE") or is_scheduled_today:
 
             batch_status = "live"
 
-            # Attendance can already be partially marked
-            present_count = (
-                db.query(
-                    func.count(
-                        func.distinct(
-                            Attendance.student_id
+            if today_session is not None:
+
+                present_count = (
+                    db.query(
+                        func.count(
+                            func.distinct(
+                                Attendance.student_id
+                            )
                         )
                     )
-                )
-                .filter(
-                    Attendance.session_id
-                    == session.id,
+                    .filter(
+                        Attendance.session_id
+                        == today_session.id,
 
-                    Attendance.status
-                    == "Present",
+                        Attendance.status
+                        == "Present",
+                    )
+                    .scalar()
+                    or 0
                 )
-                .scalar()
-                or 0
-            )
 
-            attendance_value = (
-                f"{present_count}/"
-                f"{student_count}"
-            )
+                attendance_value = (
+                    f"{present_count}/"
+                    f"{student_count}"
+                )
+
+                session_id_str = str(today_session.id)
+
+            else:
+
+                attendance_value = None
+
+                session_id_str = None
+
+            date_label = today.strftime("%d %b %Y")
 
         else:
 
-            batch_status = "upcoming"
+            # Not scheduled today and no session created today
+            batch_status = "no_class"
 
             attendance_value = None
+
+            session_id_str = None
+
+            date_label = next_training_date.strftime("%d %b %Y")
 
         # =================================================
         # TIME
@@ -1097,9 +1124,7 @@ def get_batches_page(
                     batch.batch_name,
 
                 "date":
-                    batch.created_at.strftime(
-                        "%d %b %Y"
-                    ),
+                    date_label,
 
                 "time":
                     time_label,
@@ -1115,6 +1140,9 @@ def get_batches_page(
 
                 "attendance":
                     attendance_value,
+
+                "session_id":
+                    session_id_str,
             }
         )
 

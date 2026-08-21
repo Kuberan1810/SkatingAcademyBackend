@@ -7,61 +7,6 @@ class SessionStart(BaseModel):
     batch_id: int
 
 
-class SessionStudent(BaseModel):
-    id: int
-    full_name: str
-    avatar_uri: str | None
-
-    batch_name: str
-
-    # Current session attendance
-    attendance_status: str | None
-
-    # Overall attendance
-    attended_classes: int
-    conducted_classes: int
-    attendance_percentage: float
-
-
-class SessionData(BaseModel):
-    id: int
-
-    batch_id: int
-    batch_name: str
-
-    coach_id: int
-
-    session_date: date
-
-    scheduled_start_time: time
-    scheduled_end_time: time
-
-    actual_start_time: time | None
-    actual_end_time: time | None
-
-    status: str
-
-    location: str
-
-    students: list[SessionStudent]
-
-    created_at: datetime
-    updated_at: datetime
-
-
-class SessionStartResponse(BaseModel):
-    status: str
-    message: str
-    data: SessionData
-
-
-
-
-
-class SessionStart(BaseModel):
-    batch_id: int
-
-
 class SessionEnd(BaseModel):
     session_id: int
 
@@ -89,6 +34,8 @@ class SessionData(BaseModel):
     actual_end_time: time | None
     status: str
     location: str
+    is_compensation_class: bool = False
+    compensation_reason: str | None = None
     students: list[SessionStudent]
     created_at: datetime
     updated_at: datetime
@@ -98,6 +45,7 @@ class SessionStartResponse(BaseModel):
     status: str
     message: str
     data: SessionData
+
 
 
 class SessionEndData(BaseModel):

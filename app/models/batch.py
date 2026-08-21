@@ -38,10 +38,12 @@ class Batch(Base):
         nullable=False,
     )
 
-    level: Mapped[str] = mapped_column(
+    level: Mapped[str | None] = mapped_column(
         String(50),
-        nullable=False,
+        nullable=True,
+        default=None,
     )
+
 
     location: Mapped[str] = mapped_column(
         String(150),

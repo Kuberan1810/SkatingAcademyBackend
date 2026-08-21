@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session as DBSession
 
 from app.auth.dependencies import get_current_admin
@@ -11,35 +12,21 @@ from app.models.batch import Batch
 from app.models.student import Student
 from app.models.session import Session as SessionModel
 from app.models.attendance import Attendance
+from app.models.batch_schedule_exception import BatchScheduleException
 
 from app.schemas.session import (
     SessionStart,
     SessionStartResponse,
+    SessionEnd,
     SessionEndResponse,
-    SessionEnd
-    
+    CompletedSessionResponse,
 )
-from datetime import date
-
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from app.auth.dependencies import get_current_admin
-from app.core.dependencies import get_db
-
-from app.models.admin import Admin
-from app.models.session import Session as SessionModel
-from app.models.batch import Batch
-from app.models.student import Student
-from app.models.attendance import Attendance
-
-from app.schemas.session import CompletedSessionResponse
 
 router = APIRouter(
     prefix="/sessions",
     tags=["Sessions"],
 )
+
 
 
 @router.post(
@@ -83,26 +70,46 @@ def start_class(
     current_time = now.time()
 
     # =====================================================
-    # 3. Check training day
+    # 3. Check training day / compensation schedule
     # =====================================================
 
     today_name = today.strftime("%A")
 
-    if today_name not in batch.training_days:
+    batch_days = {
+        str(d).strip().lower()
+        for d in (batch.training_days or [])
+        if d
+    }
+
+    is_regular_training_day = today_name.lower() in batch_days
+
+    compensation = (
+        db.query(BatchScheduleException)
+        .filter(
+            BatchScheduleException.batch_id == batch.id,
+            BatchScheduleException.compensation_date == today,
+            BatchScheduleException.status == "APPROVED",
+        )
+        .first()
+    )
+
+    is_compensation_day = compensation is not None
+
+    if not is_regular_training_day and not is_compensation_day:
 
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
                 f"Today ({today_name}) is not "
-                f"a training day for this batch"
+                f"a scheduled training day or approved compensation day for this batch"
             ),
         )
 
     # =====================================================
-    # 4. Check if class already started
+    # 4. Check if class already started or completed today
     # =====================================================
 
-    existing_session = (
+    existing_live_session = (
         db.query(SessionModel)
         .filter(
             SessionModel.batch_id == batch.id,
@@ -112,11 +119,28 @@ def start_class(
         .first()
     )
 
-    if existing_session is not None:
+    if existing_live_session is not None:
 
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Class is already started for this batch",
+        )
+
+    completed_session = (
+        db.query(SessionModel)
+        .filter(
+            SessionModel.batch_id == batch.id,
+            SessionModel.session_date == today,
+            SessionModel.status == "COMPLETED",
+        )
+        .first()
+    )
+
+    if completed_session is not None:
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Today's class has already been completed for this batch",
         )
 
     # =====================================================
@@ -297,6 +321,14 @@ def start_class(
 
             "location": session.location,
 
+            "is_compensation_class": is_compensation_day,
+
+            "compensation_reason": (
+                compensation.reason
+                if (is_compensation_day and compensation)
+                else None
+            ),
+
             "students": student_data,
 
             "created_at": session.created_at,
@@ -461,7 +493,7 @@ def end_class(
 )
 def get_completed_session(
     session_id: int,
-    db: Session = Depends(get_db),
+    db: DBSession = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ):
 

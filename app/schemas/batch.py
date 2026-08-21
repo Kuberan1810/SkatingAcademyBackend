@@ -35,7 +35,10 @@ class BatchCreate(BaseModel):
         max_length=100,
     )
 
-    level: str
+    level: str | None = Field(
+        default=None,
+        max_length=50,
+    )
 
     location: str = Field(
         min_length=2,
@@ -67,7 +70,9 @@ class BatchCreate(BaseModel):
 
     @field_validator("level")
     @classmethod
-    def validate_level(cls, value: str) -> str:
+    def validate_level(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         if value not in VALID_LEVELS:
             raise ValueError(
                 f"Invalid level. Choose from: "
@@ -75,6 +80,7 @@ class BatchCreate(BaseModel):
             )
 
         return value
+
 
     @field_validator("class_type")
     @classmethod
@@ -167,7 +173,7 @@ class BatchCreate(BaseModel):
 class BatchResponse(BaseModel):
     id: int
     batch_name: str
-    level: str
+    level: str | None = None
     location: str
     description: str | None
     class_type: str
@@ -181,6 +187,7 @@ class BatchResponse(BaseModel):
     model_config = {
         "from_attributes": True,
     }
+
 
 
 #batch update

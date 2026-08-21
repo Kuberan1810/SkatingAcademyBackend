@@ -94,6 +94,13 @@ def create_student(
             detail="Student age must be at least 3 years",
         )
 
+    # Auto-resolve monthly fee from batch if not explicitly provided
+    resolved_monthly_fee = (
+        data.monthly_fee
+        if data.monthly_fee is not None
+        else (batch.monthly_fee or 0)
+    )
+
     # Create student
     student = Student(
         full_name=data.full_name,
@@ -105,13 +112,14 @@ def create_student(
         parent_name=data.parent_name,
         phone_number=data.phone_number,
         emergency_contact=data.emergency_contact,
-        monthly_fee=data.monthly_fee,
+        monthly_fee=resolved_monthly_fee,
         avatar_uri=data.avatar_uri,
     )
 
     db.add(student)
     db.commit()
     db.refresh(student)
+
 
     return {
         "status": "success",

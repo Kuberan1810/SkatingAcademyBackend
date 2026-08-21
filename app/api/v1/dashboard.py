@@ -14,6 +14,8 @@ from app.models.batch import Batch
 from app.models.fee import FeePayment
 from app.models.session import Session as SessionModel
 from app.models.student import Student
+from app.models.batch_schedule_exception import BatchScheduleException
+
 
 from app.schemas.dashboard import DashboardResponse
 
@@ -273,8 +275,18 @@ def get_dashboard(
     today_scheduled_batches = []
     for batch in active_batches:
         days = {str(d).strip().lower() for d in (batch.training_days or []) if d}
-        if today_weekday_name in days:
+        is_comp = (
+            db.query(BatchScheduleException)
+            .filter(
+                BatchScheduleException.batch_id == batch.id,
+                BatchScheduleException.compensation_date == today,
+                BatchScheduleException.status == "APPROVED",
+            )
+            .first()
+        ) is not None
+        if (today_weekday_name in days) or is_comp:
             today_scheduled_batches.append(batch)
+
 
     today_sessions = (
         db.query(SessionModel)
@@ -590,8 +602,19 @@ def get_dashboard(
             if day
         }
 
-        if target_weekday not in normalized_training_days:
+        is_comp = (
+            db.query(BatchScheduleException)
+            .filter(
+                BatchScheduleException.batch_id == batch.id,
+                BatchScheduleException.compensation_date == target_date,
+                BatchScheduleException.status == "APPROVED",
+            )
+            .first()
+        ) is not None
+
+        if target_weekday not in normalized_training_days and not is_comp:
             continue
+
 
         student_count = (
             db.query(func.count(Student.id))

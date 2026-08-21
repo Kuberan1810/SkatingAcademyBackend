@@ -157,7 +157,8 @@ def global_search(
                 "batch_id": batch.id,
                 "title": batch.batch_name,
                 "subtitle": batch.location,
-                "meta": f"{batch.level} • {batch.class_type}",
+                "meta": f"{batch.level} • {batch.class_type}" if batch.level else f"{batch.class_type}",
+
                 "image": None,
             }
         )
