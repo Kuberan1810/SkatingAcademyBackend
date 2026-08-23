@@ -65,7 +65,7 @@ def collect_fee(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Student not found or inactive",
         )
-
+     
     # =====================================================
     # 2. Find student's active batch
     # =====================================================

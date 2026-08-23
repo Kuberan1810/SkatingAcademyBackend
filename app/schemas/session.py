@@ -92,6 +92,9 @@ class CompletedSessionDetails(BaseModel):
     present_count: int
     absent_count: int
 
+    is_compensation_class: bool = False
+    compensation_reason: str | None = None
+
 
 # =========================================================
 # STUDENT ATTENDANCE ITEM
@@ -119,6 +122,8 @@ class CompletedStudentItem(BaseModel):
 
 class CompletedSessionData(BaseModel):
     session_details: CompletedSessionDetails
+    is_compensation_class: bool = False
+    compensation_reason: str | None = None
     students: list[CompletedStudentItem]
 
 
@@ -129,4 +134,4 @@ class CompletedSessionData(BaseModel):
 class CompletedSessionResponse(BaseModel):
     status: str
     message: str
-    data: CompletedSessionData
+    data: CompletedSessionData

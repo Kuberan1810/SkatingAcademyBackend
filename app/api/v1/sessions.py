@@ -763,7 +763,7 @@ def get_completed_session(
     )
 
     # =====================================================
-    # 8. DATE TEXT
+    # 8. DATE TEXT & COMPENSATION CHECK
     # =====================================================
 
     if session.session_date == date.today():
@@ -780,6 +780,23 @@ def get_completed_session(
                 "%A · %d %b %Y"
             )
         )
+
+    compensation = (
+        db.query(BatchScheduleException)
+        .filter(
+            BatchScheduleException.batch_id == batch.id,
+            BatchScheduleException.compensation_date == session.session_date,
+            BatchScheduleException.status == "APPROVED",
+        )
+        .first()
+    )
+
+    is_compensation_class = compensation is not None
+    compensation_reason = (
+        compensation.reason
+        if (is_compensation_class and compensation)
+        else None
+    )
 
     # =====================================================
     # 9. FINAL RESPONSE
@@ -814,9 +831,21 @@ def get_completed_session(
 
                 "absent_count":
                     absent_count,
+
+                "is_compensation_class":
+                    is_compensation_class,
+
+                "compensation_reason":
+                    compensation_reason,
             },
+
+            "is_compensation_class":
+                is_compensation_class,
+
+            "compensation_reason":
+                compensation_reason,
 
             "students":
                 student_items,
         },
-    }
+    }
