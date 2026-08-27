@@ -6,13 +6,13 @@ from fastapi import (
     APIRouter,
     Depends,
     HTTPException,
+    Query,
     status,
 )
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
 
 from app.auth.dependencies import get_current_admin
 from app.core.dependencies import get_db
@@ -21,6 +21,8 @@ from app.models.admin import Admin
 from app.models.batch import Batch
 from app.models.fee import FeePayment
 from app.models.student import Student
+from app.services.fee_service import calculate_student_fee_summary
+
 
 from app.schemas.fee import (
     FeeCollect,
@@ -366,6 +368,10 @@ def get_recent_payments(
     response_model=FeePageResponse,
 )
 def get_fees_page(
+    sort_by: str | None = Query(
+        default=None,
+        description="Sort by: 'unpaid_months', 'last_payment', 'amount', 'name', 'status'",
+    ),
     db: Session = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin),
 ):
@@ -425,27 +431,6 @@ def get_fees_page(
     # 2. TODAY'S COLLECTION COUNT
     # =====================================================
 
-    # today_collection_count = (
-    #     db.query(
-    #         func.count(FeePayment.id)
-    #     )
-    #     .filter(
-    #         FeePayment.payment_date >= today,
-    #         FeePayment.payment_date
-    #         < date(
-    #             today.year,
-    #             today.month,
-    #             today.day,
-    #         )
-    #         .fromordinal(
-    #             today.toordinal() + 1
-    #         ),
-    #     )
-    #     .scalar()
-    #     or 0
-    # )
-
-
     tomorrow = date.fromordinal(
         today.toordinal() + 1
     )
@@ -461,6 +446,7 @@ def get_fees_page(
         .scalar()
         or 0
     )
+
     # =====================================================
     # 3. THIS MONTH COLLECTION
     # =====================================================
@@ -490,133 +476,69 @@ def get_fees_page(
     )
 
     # =====================================================
-    # 4. STUDENT FEE DATA
+    # 4. STUDENT FEE DATA & HISTORY
     # =====================================================
 
     student_items = []
 
     pending_fees_amount = 0
 
+    # Pre-fetch all payments for active students to optimize queries
+    student_ids = [s.id for s, _ in students]
+    all_student_payments = (
+        db.query(FeePayment)
+        .filter(FeePayment.student_id.in_(student_ids))
+        .order_by(FeePayment.payment_date.desc(), FeePayment.id.desc())
+        .all()
+    ) if student_ids else []
+
     for student, batch in students:
 
-        # =================================================
-        # CURRENT MONTH PAYMENT
-        # =================================================
-
-        payment = (
-            db.query(FeePayment)
-            .filter(
-                FeePayment.student_id
-                == student.id,
-
-                FeePayment.fee_month
-                == current_month,
-
-                FeePayment.fee_year
-                == current_year,
-            )
-            .order_by(
-                FeePayment.payment_date.desc()
-            )
-            .first()
+        fee_summary = calculate_student_fee_summary(
+            db=db,
+            student=student,
+            batch=batch,
+            today=today,
+            all_payments=all_student_payments,
         )
 
-        # =================================================
-        # PAYMENT EXISTS
-        # =================================================
-
-        if payment is not None:
-
-            payment_status = "paid"
-
-            amount = int(
-                payment.net_payable
-            )
-
-            paid_date = (
-                payment.payment_date.strftime(
-                    "%d %b %Y"
-                )
-                if payment.payment_date
-                else None
-            )
-
-        # =================================================
-        # NO CURRENT MONTH PAYMENT
-        # =================================================
-
-        else:
-
-            amount = int(
-                batch.monthly_fee
-            )
-
-            paid_date = None
-
-            # ---------------------------------------------
-            # FEE DUE DATE
-            # ---------------------------------------------
-
-            due_day = 1
-
-            due_date = date(
-                current_year,
-                current_month,
-                due_day,
-            )
-
-            # ---------------------------------------------
-            # STATUS
-            # ---------------------------------------------
-
-            if today > due_date:
-
-                payment_status = "overdue"
-
-            elif today == due_date:
-
-                payment_status = "due_today"
-
-            else:
-
-                payment_status = "unpaid"
-
-            # ---------------------------------------------
-            # Pending amount
-            # ---------------------------------------------
-
-            pending_fees_amount += amount
-
-        # =================================================
-        # ADD STUDENT
-        # =================================================
+        if fee_summary["payment_status"] in ("overdue", "due_today", "unpaid"):
+            pending_fees_amount += fee_summary["amount"]
 
         student_items.append(
             {
-                "id":
-                    str(student.id),
-
-                "name":
-                    student.full_name,
-                    
+                "id": str(student.id),
+                "name": student.full_name,
                 "batch_name": batch.batch_name,
-
-                "location":
-                    batch.location,
-
-                "phone":
-                    student.phone_number,
-
-                "payment_status":
-                    payment_status,
-
-                "amount":
-                    amount,
-
-                "paid_date":
-                    paid_date,
+                "location": batch.location,
+                "phone": student.phone_number,
+                "payment_status": fee_summary["payment_status"],
+                "amount": fee_summary["amount"],
+                "paid_date": fee_summary["paid_date"],
+                "last_paid_date": fee_summary["last_paid_date"],
+                "last_paid_month": fee_summary["last_paid_month"],
+                "unpaid_months_count": fee_summary["unpaid_months_count"],
+                "total_pending_amount": fee_summary["total_pending_amount"],
+                "previous_month_status": fee_summary["previous_month_status"],
             }
         )
+
+    # =====================================================
+    # 4.5 SORTING
+    # =====================================================
+
+    if sort_by in ("unpaid_months", "overdue"):
+        student_items.sort(key=lambda s: s["unpaid_months_count"], reverse=True)
+    elif sort_by == "last_payment":
+        student_items.sort(key=lambda s: s["last_paid_date"] or "", reverse=True)
+    elif sort_by == "amount":
+        student_items.sort(key=lambda s: s["total_pending_amount"], reverse=True)
+    elif sort_by == "name":
+        student_items.sort(key=lambda s: s["name"].lower())
+    elif sort_by == "status":
+        status_rank = {"overdue": 0, "due_today": 1, "unpaid": 2, "paid": 3}
+        student_items.sort(key=lambda s: status_rank.get(s["payment_status"], 4))
+
 
     # =====================================================
     # 5. RECENT PAYMENTS

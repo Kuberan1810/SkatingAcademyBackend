@@ -130,6 +130,11 @@ class FeePageStudent(BaseModel):
     payment_status: str
     amount: int
     paid_date: str | None
+    last_paid_date: str | None = None
+    last_paid_month: str | None = None
+    unpaid_months_count: int = 0
+    total_pending_amount: int = 0
+    previous_month_status: str = "unpaid"
 
 # =========================================================
 # RECENT PAYMENT
@@ -213,6 +218,12 @@ class PendingFeeStudent(BaseModel):
 
     status: str
 
+    last_paid_date: str | None = None
+    last_paid_month: str | None = None
+    unpaid_months_count: int = 0
+    total_pending_amount: int = 0
+    previous_month_status: str = "unpaid"
+
 # =========================================================
 # PENDING FEE COLLECTION
 # =========================================================
@@ -246,6 +257,12 @@ class PendingFeeItem(BaseModel):
     phone: str
 
     avatar_uri: str | None = None
+
+    last_paid_date: str | None = None
+    last_paid_month: str | None = None
+    unpaid_months_count: int = 0
+    total_pending_amount: int = 0
+    previous_month_status: str = "unpaid"
 
 
 class PendingFeeData(BaseModel):

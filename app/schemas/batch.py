@@ -353,11 +353,19 @@ class BatchStudentItem(BaseModel):
     amount: int
     paid_date: str | None
 
+    # Payment tracking & overdue history
+    last_paid_date: str | None = None
+    last_paid_month: str | None = None
+    unpaid_months_count: int = 0
+    total_pending_amount: int = 0
+    previous_month_status: str = "unpaid"
+
     last_payment: LastPayment | None
 
     attendance_ratio: str
     attendance_ratio_status: str
     avatar_uri: str | None
+
 
 # =========================================================
 # BATCH DETAILS

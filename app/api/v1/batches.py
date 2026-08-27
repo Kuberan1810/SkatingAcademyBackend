@@ -14,6 +14,8 @@ from app.models.session import Session as SessionModel
 from app.models.attendance import Attendance
 from app.models.fee import FeePayment
 from app.models.batch_schedule_exception import BatchScheduleException
+from app.services.fee_service import calculate_student_fee_summary
+
 
 
 from app.schemas.batch import (
@@ -472,55 +474,15 @@ def get_batch_students(
             last_payment_data = None
 
         # =================================================
-        # CURRENT MONTH PAYMENT STATUS
+        # DETAILED FEE SUMMARY & HISTORY
         # =================================================
 
-        if payment is not None:
-
-            payment_status = "paid"
-
-            amount = int(
-                payment.net_payable
-            )
-
-            paid_date = (
-                payment.payment_date.strftime(
-                    "%d %b %Y"
-                )
-                if payment.payment_date
-                else None
-            )
-
-        else:
-
-            # No payment for current month
-
-            amount = int(
-                batch.monthly_fee
-            )
-
-            paid_date = None
-
-            # ---------------------------------------------
-            # Due date
-            # ---------------------------------------------
-
-            due_day = min(
-                student.join_date.day,
-                28,
-            )
-
-            due_date = today.replace(
-                day=due_day
-            )
-
-            if today > due_date:
-
-                payment_status = "overdue"
-
-            else:
-
-                payment_status = "pending"
+        fee_summary = calculate_student_fee_summary(
+            db=db,
+            student=student,
+            batch=batch,
+            today=today,
+        )
 
         # =================================================
         # ADD STUDENT
@@ -528,50 +490,27 @@ def get_batch_students(
 
         student_items.append(
             {
-                "id":
-                    str(student.id),
-
-                "name":
-                    student.full_name,
-
-                "joined_date":
-                    student.join_date.strftime(
-                        "%d %b %Y"
-                    ),
-
-                "location":
-                    batch.location,
-
-                "attendance_percent":
-                    f"{attendance_percentage:g}%",
-
-                "phone":
-                    student.phone_number,
-
-                # Current month payment
-                "payment_status":
-                    payment_status,
-
-                "amount":
-                    amount,
-
-                "paid_date":
-                    paid_date,
-
-                # Latest historical payment
-                "last_payment":
-                    last_payment_data,
-
-                "attendance_ratio":
-                    attendance_ratio,
-
-                "attendance_ratio_status":
-                    attendance_ratio_status,
-
-                "avatar_uri":
-                    student.avatar_uri,
+                "id": str(student.id),
+                "name": student.full_name,
+                "joined_date": student.join_date.strftime("%d %b %Y"),
+                "location": batch.location,
+                "attendance_percent": f"{attendance_percentage:g}%",
+                "phone": student.phone_number,
+                "payment_status": fee_summary["payment_status"],
+                "amount": fee_summary["amount"],
+                "paid_date": fee_summary["paid_date"],
+                "last_paid_date": fee_summary["last_paid_date"],
+                "last_paid_month": fee_summary["last_paid_month"],
+                "unpaid_months_count": fee_summary["unpaid_months_count"],
+                "total_pending_amount": fee_summary["total_pending_amount"],
+                "previous_month_status": fee_summary["previous_month_status"],
+                "last_payment": fee_summary["last_payment"],
+                "attendance_ratio": attendance_ratio,
+                "attendance_ratio_status": attendance_ratio_status,
+                "avatar_uri": student.avatar_uri,
             }
         )
+
 
     # =====================================================
     # 7. AVERAGE ATTENDANCE

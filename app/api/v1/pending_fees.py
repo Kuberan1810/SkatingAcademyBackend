@@ -15,8 +15,10 @@ from app.models.admin import Admin
 from app.models.student import Student
 from app.models.batch import Batch
 from app.models.fee import FeePayment
+from app.services.fee_service import calculate_student_fee_summary
 
 from app.schemas.fee import (
+
     PendingFeeCollectionResponse,
     PendingFeeItem,
 )
@@ -346,45 +348,38 @@ def get_pending_fees(
         )
 
         # =================================================
+        # CALCULATE DETAILED FEE SUMMARY
+        # =================================================
+
+        fee_summary = calculate_student_fee_summary(
+            db=db,
+            student=student,
+            batch=batch,
+            today=today,
+        )
+
+        # =================================================
         # ADD FEE
         # =================================================
 
         fees.append(
             PendingFeeItem(
-
-                id=str(
-                    student.id
-                ),
-
-                student_name=(
-                    student.full_name
-                ),
-
-                batch_name=(
-                    batch.batch_name
-                ),
-
-                due_date=(
-                    formatted_due_date
-                ),
-
-                amount=(
-                    pending_amount
-                ),
-
-                status=(
-                    fee_status
-                ),
-
-                phone=(
-                    student.phone_number
-                ),
-
-                avatar_uri=(
-                    student.avatar_uri
-                ),
+                id=str(student.id),
+                student_name=student.full_name,
+                batch_name=batch.batch_name,
+                due_date=formatted_due_date,
+                amount=pending_amount,
+                status=fee_status,
+                phone=student.phone_number,
+                avatar_uri=student.avatar_uri,
+                last_paid_date=fee_summary["last_paid_date"],
+                last_paid_month=fee_summary["last_paid_month"],
+                unpaid_months_count=fee_summary["unpaid_months_count"],
+                total_pending_amount=fee_summary["total_pending_amount"],
+                previous_month_status=fee_summary["previous_month_status"],
             )
         )
+
 
     # =====================================================
     # FINAL RESPONSE

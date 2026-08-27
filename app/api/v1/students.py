@@ -27,10 +27,12 @@ from app.schemas.student import (
 from app.models.session import Session as SessionModel
 from app.models.attendance import Attendance
 from app.models.fee import FeePayment
+from app.services.fee_service import calculate_student_fee_summary
 
 from app.schemas.student import (
     BulkDeleteStudentsRequest,
 )
+
 
 
 
@@ -466,75 +468,18 @@ def get_all_students_page(
                 ),
             }
 
-        else:
-
-            last_payment_data = None
         # =================================================
-        # PAYMENT EXISTS
+        # DETAILED FEE SUMMARY & HISTORY
         # =================================================
 
-        if payment is not None:
+        fee_summary = calculate_student_fee_summary(
+            db=db,
+            student=student,
+            batch=batch,
+            today=today,
+        )
 
-            payment_status = "paid"
-
-            amount = int(
-                payment.net_payable
-            )
-
-            paid_date = (
-                payment.payment_date.strftime(
-                    "%d %b %Y"
-                )
-                if payment.payment_date
-                else None
-            )
-
-        # =================================================
-        # NO CURRENT MONTH PAYMENT
-        # =================================================
-
-        else:
-
-            amount = int(
-                student.monthly_fee
-                if (student.monthly_fee is not None and student.monthly_fee > 0)
-                else (batch.monthly_fee or 0)
-            )
-
-            paid_date = None
-
-            # ---------------------------------------------
-            # DUE DATE
-            # ---------------------------------------------
-
-            due_day = 1
-
-            due_date = date(
-                current_year,
-                current_month,
-                due_day,
-            )
-
-            # ---------------------------------------------
-            # PAYMENT STATUS
-            # ---------------------------------------------
-
-            if today > due_date:
-
-                payment_status = "overdue"
-
-            elif today == due_date:
-
-                payment_status = "due_today"
-
-            else:
-
-                payment_status = "unpaid"
-
-            # ---------------------------------------------
-            # PENDING FEE COUNT
-            # ---------------------------------------------
-
+        if fee_summary["payment_status"] in ("overdue", "due_today", "unpaid"):
             pending_fees_count += 1
 
         # =================================================
@@ -543,50 +488,28 @@ def get_all_students_page(
 
         student_items.append(
             {
-                "id":
-                    str(student.id),
-
-                "name":
-                    student.full_name,
-
-                "batch_name":
-                    batch.batch_name,
-
-                "joined_date":
-                    student.join_date.strftime(
-                        "%d %b %Y"
-                    ),
-
-                "location":
-                    batch.location,
-
-                "attendance_percent":
-                    f"{attendance_percentage:g}%",
-
-                "phone":
-                    student.phone_number,
-
-                "payment_status":
-                    payment_status,
-
-                "amount":
-                    amount,
-
-                "paid_date":
-                    paid_date,
-
-                "last_payment": last_payment_data,
-
-                "attended_count":
-                    attended_count,
-
-                "conducted_count":
-                    conducted_count,
-
-                "avatar_uri":
-                    student.avatar_uri,
+                "id": str(student.id),
+                "name": student.full_name,
+                "batch_name": batch.batch_name,
+                "joined_date": student.join_date.strftime("%d %b %Y"),
+                "location": batch.location,
+                "attendance_percent": f"{attendance_percentage:g}%",
+                "phone": student.phone_number,
+                "payment_status": fee_summary["payment_status"],
+                "amount": fee_summary["amount"],
+                "paid_date": fee_summary["paid_date"],
+                "last_paid_date": fee_summary["last_paid_date"],
+                "last_paid_month": fee_summary["last_paid_month"],
+                "unpaid_months_count": fee_summary["unpaid_months_count"],
+                "total_pending_amount": fee_summary["total_pending_amount"],
+                "previous_month_status": fee_summary["previous_month_status"],
+                "last_payment": fee_summary["last_payment"],
+                "attended_count": attended_count,
+                "conducted_count": conducted_count,
+                "avatar_uri": student.avatar_uri,
             }
         )
+
 
     # =====================================================
     # 6. FINAL RESPONSE
