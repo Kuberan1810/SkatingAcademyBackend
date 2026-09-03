@@ -33,33 +33,64 @@ from app.models.student import Student
 
 
 # =========================================================
-# PADDLE OCR (RAPIDOCR ONNX) CONFIGURATION
-# Lightweight, pure-Python / pip-installable, no Docker required
+# TESSERACT OCR CONFIGURATION
 # =========================================================
 
-_rapid_ocr_engine = None
-
-
-def get_ocr_engine():
-    """
-    Returns the singleton RapidOCR (PaddleOCR ONNX) engine instance.
-    """
-    global _rapid_ocr_engine
-    if _rapid_ocr_engine is None:
-        try:
-            from rapidocr_onnxruntime import RapidOCR
-            _rapid_ocr_engine = RapidOCR()
-        except ImportError:
-            _rapid_ocr_engine = None
-    return _rapid_ocr_engine
-
-
 def get_tesseract_cmd() -> str:
-    return "rapidocr-onnxruntime (PaddleOCR)"
+    """
+    Dynamically resolves Tesseract OCR executable path:
+    1. TESSERACT_CMD environment variable (Docker / Render / Custom path)
+    2. shutil.which("tesseract") from system PATH
+    3. Linux / Render standard locations (/usr/bin/tesseract, /usr/local/bin/tesseract)
+    4. Windows standard installation paths (only if running on Windows)
+    """
+    # 1. Environment variable override (e.g. Render config or .env)
+    env_path = os.getenv("TESSERACT_CMD")
+    if env_path:
+        if os.path.isfile(env_path) or shutil.which(env_path):
+            return env_path
+
+    # 2. System PATH search
+    tesseract_in_path = shutil.which("tesseract")
+    if tesseract_in_path:
+        return tesseract_in_path
+
+    # 3. Standard Linux / Docker / Render paths
+    linux_paths = [
+        "/usr/bin/tesseract",
+        "/usr/local/bin/tesseract",
+        "/usr/bin/tesseract-ocr",
+    ]
+    for path in linux_paths:
+        if os.path.isfile(path):
+            return path
+
+    # 4. Standard Windows paths (only checked if OS is Windows)
+    if os.name == "nt":
+        windows_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+        ]
+        for path in windows_paths:
+            if os.path.isfile(path):
+                return path
+
+    # Fallback default
+    return "/usr/bin/tesseract" if os.name != "nt" else "tesseract"
 
 
 def configure_tesseract() -> str:
-    return "rapidocr-onnxruntime (PaddleOCR)"
+    """
+    Applies resolved Tesseract path to pytesseract.
+    Returns the resolved path.
+    """
+    cmd = get_tesseract_cmd()
+    pytesseract.pytesseract.tesseract_cmd = cmd
+    return cmd
+
+
+configure_tesseract()
 
 # =========================================================
 # FIELD ALIASES
@@ -780,26 +811,39 @@ def parse_docx(
 
 def parse_text_records(
     text: str,
-) -> list[dict[str, Any]]:
+):
+
     text = (
         text
-        .replace("\r\n", "\n")
-        .replace("\r", "\n")
+        .replace(
+            "\r\n",
+            "\n",
+        )
+        .replace(
+            "\r",
+            "\n",
+        )
     )
 
     lines = [
         line.strip()
         for line
         in text.split("\n")
-        if line.strip()
+    ]
+
+    lines = [
+        line
+        for line
+        in lines
+        if line
     ]
 
     if not lines:
         return []
 
     records = []
+
     current = {}
-    pending_field = None
 
     field_pattern = re.compile(
         r"^\s*(.+?)\s*[:=]\s*(.*?)\s*$"
@@ -808,48 +852,61 @@ def parse_text_records(
     for line in lines:
 
         # -------------------------------------------------
-        # Student 1 / Student 2 separator
+        # Student 1 / Student 2
         # -------------------------------------------------
+
         if re.match(
-            r"^(?:student|record|candidate|entry)\s*\d+",
+            r"^student\s*\d+",
             line,
             re.IGNORECASE,
         ):
+
             if current:
-                records.append(current)
+
+                records.append(
+                    current
+                )
+
                 current = {}
-            pending_field = None
+
             continue
 
-        match = field_pattern.match(line)
-        if match:
-            raw_key = match.group(1).strip()
-            value = match.group(2).strip()
-            field_name = map_field_name(raw_key)
+        match = (
+            field_pattern.match(
+                line
+            )
+        )
 
-            if field_name:
-                if value:
-                    if field_name in current and field_name == "full_name":
-                        records.append(current)
-                        current = {}
-                    current[field_name] = value
-                    pending_field = None
-                else:
-                    # Key without value on this line (e.g. "Name:" then "Ramesh")
-                    pending_field = field_name
+        if not match:
             continue
 
-        # Handle pending field from previous line
-        if pending_field:
-            if pending_field in current and pending_field == "full_name":
-                records.append(current)
-                current = {}
-            current[pending_field] = line
-            pending_field = None
-            continue
+        raw_key = (
+            match.group(1)
+            .strip()
+        )
+
+        value = (
+            match.group(2)
+            .strip()
+        )
+
+        field_name = (
+            map_field_name(
+                raw_key
+            )
+        )
+
+        if field_name:
+
+            current[
+                field_name
+            ] = value
 
     if current:
-        records.append(current)
+
+        records.append(
+            current
+        )
 
     return records
 
@@ -870,92 +927,126 @@ def parse_txt(
 
 
 # =========================================================
-# PADDLE OCR (RAPIDOCR ONNX) TEXT EXTRACTION
+# IMAGE OCR & PREPROCESSING
 # =========================================================
 
-def extract_text_from_image(
-    image_input: str | bytes | Image.Image | np.ndarray,
-) -> str:
+def preprocess_image_cv(
+    image_input: str | bytes | Image.Image,
+) -> Image.Image:
     """
-    Extracts text from an image using PaddleOCR (RapidOCR ONNX).
-    - 100% pure Python / pip package (no apt-get or Docker needed)
-    - Lightweight, fast (~50ms), and highly accurate on tables and mobile photos.
+    Enhanced image preprocessing using OpenCV with Pillow fallback:
+    - Normalizes resolution (rescales images with width < 1600px)
+    - Converts to grayscale
+    - Removes noise via Gaussian blur
+    - Enhances text contrast via Otsu binarization and adaptive thresholding
     """
-    img_np = None
+    img_bgr = None
 
     try:
-        if isinstance(image_input, np.ndarray):
-            img_np = image_input
-        elif isinstance(image_input, Image.Image):
-            img_np = np.array(image_input.convert("RGB"))
+        if isinstance(image_input, Image.Image):
+            pil_img = image_input.convert("RGB")
+            img_np = np.array(pil_img)
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         elif isinstance(image_input, (bytes, bytearray)):
             np_arr = np.frombuffer(image_input, np.uint8)
-            img_np = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            if img_np is None:
-                pil_img = Image.open(io.BytesIO(image_input)).convert("RGB")
-                img_np = np.array(pil_img)
+            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
         elif isinstance(image_input, str):
             if os.path.isfile(image_input):
-                img_np = cv2.imread(image_input)
-                if img_np is None:
-                    pil_img = Image.open(image_input).convert("RGB")
-                    img_np = np.array(pil_img)
+                img_bgr = cv2.imread(image_input)
     except Exception:
-        img_np = None
+        img_bgr = None
 
-    if img_np is None:
-        raise ValueError("Unable to read or decode image file.")
+    if img_bgr is not None and img_bgr.size > 0:
+        height, width = img_bgr.shape[:2]
 
-    # 1. Try RapidOCR (PaddleOCR ONNX)
-    engine = get_ocr_engine()
-    if engine is not None:
-        try:
-            results, _ = engine(img_np)
-            if results:
-                # Sort text blocks top-to-bottom
-                results_sorted = sorted(results, key=lambda item: item[0][0][1])
-                lines = [item[1].strip() for item in results_sorted if item[1].strip()]
-                extracted_text = "\n".join(lines)
-                if extracted_text.strip():
-                    return extracted_text
-        except Exception:
-            pass
+        # Rescale if image is too small
+        if width < 1600:
+            scale = 1600.0 / width
+            new_w = int(width * scale)
+            new_h = int(height * scale)
+            img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-    # 2. Optional Fallback to PyTesseract if available
-    try:
-        pil_fallback = Image.fromarray(img_np)
-        extracted = pytesseract.image_to_string(pil_fallback, config="--psm 6")
-        if extracted.strip():
-            return extracted
-    except Exception:
-        pass
+        # Grayscale
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    return ""
+        # Mild denoise blur
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+
+        # Otsu binarization
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        return Image.fromarray(thresh)
+
+    # Fallback to pure Pillow preprocessing
+    if isinstance(image_input, str):
+        pil_img = Image.open(image_input)
+    elif isinstance(image_input, (bytes, bytearray)):
+        pil_img = Image.open(io.BytesIO(image_input))
+    elif isinstance(image_input, Image.Image):
+        pil_img = image_input
+    else:
+        raise ValueError("Invalid image input for OCR")
+
+    pil_img = pil_img.convert("L")
+    pil_img = ImageOps.autocontrast(pil_img)
+
+    width, height = pil_img.size
+    if width < 1600:
+        scale = 1600.0 / width
+        pil_img = pil_img.resize((int(width * scale), int(height * scale)), Image.Resampling.LANCZOS)
+
+    return pil_img
 
 
 def preprocess_image(image: Image.Image) -> Image.Image:
-    return image
+    return preprocess_image_cv(image)
 
 
 def parse_image(
     file_path_or_bytes: str | bytes | Image.Image,
 ) -> list[dict[str, Any]]:
     """
-    Extracts structured student records from image files (.jpg, .jpeg, .png, .webp)
-    using lightweight PaddleOCR.
+    Robust OCR extraction for image files (.jpg, .jpeg, .png, .webp).
+    Supports multi-pass PSM strategies and dynamic Tesseract configuration.
     """
+    configure_tesseract()
+
     try:
-        text = extract_text_from_image(file_path_or_bytes)
+        preprocessed = preprocess_image_cv(file_path_or_bytes)
     except UnidentifiedImageError as exc:
         raise ValueError("Invalid or unreadable image file format.") from exc
     except Exception as exc:
-        raise ValueError(f"Failed to process image for OCR: {exc}") from exc
+        raise ValueError(f"Failed to load image for OCR: {exc}") from exc
+
+    text = ""
+    last_error = None
+
+    # Multi-strategy OCR: first tabular (--psm 6), then standard page (--psm 4), then automatic (--psm 3)
+    ocr_configs = [
+        "--oem 3 --psm 6",
+        "--oem 3 --psm 4",
+        "--oem 3 --psm 3",
+    ]
+
+    for cfg in ocr_configs:
+        try:
+            extracted = pytesseract.image_to_string(preprocessed, config=cfg)
+            if extracted and len(extracted.strip()) > 10:
+                text = extracted
+                break
+        except pytesseract.TesseractNotFoundError as exc:
+            raise ValueError(
+                "Tesseract OCR is not installed or executable path is incorrect. "
+                f"Configured path: '{pytesseract.pytesseract.tesseract_cmd}'"
+            ) from exc
+        except Exception as exc:
+            last_error = exc
+            continue
 
     if not text.strip():
-        raise ValueError(
-            "No readable student data found in image. "
-            "Please ensure the image is clear and legible."
-        )
+        if last_error:
+            raise ValueError(f"Image OCR failed: {last_error}")
+        raise ValueError("No readable student data found in image. Please ensure the image is clear and legible.")
 
     return parse_text_records(text)
 
@@ -973,9 +1064,10 @@ def parse_pdf(
     Flow:
     1. Try PyMuPDF text extraction.
     2. If text exists -> parse text.
-    3. If PDF has no selectable text -> OCR pages with PaddleOCR.
+    3. If PDF has no selectable text -> OCR pages with enhanced preprocessing.
     4. If both fail -> return a clear error.
     """
+    configure_tesseract()
 
     # =====================================================
     # 1. PYMuPDF
@@ -1029,7 +1121,7 @@ def parse_pdf(
                 return records
 
         # =================================================
-        # 2. OCR FALLBACK (PaddleOCR)
+        # 2. OCR FALLBACK
         # =================================================
 
         ocr_records = []
@@ -1050,12 +1142,43 @@ def parse_pdf(
                 alpha=False,
             )
 
-            img_np = np.frombuffer(
+            image = Image.frombytes(
+                "RGB",
+                [
+                    pix.width,
+                    pix.height,
+                ],
                 pix.samples,
-                dtype=np.uint8,
-            ).reshape((pix.height, pix.width, 3))
+            )
 
-            ocr_text = extract_text_from_image(img_np)
+            # Preprocess
+            image = preprocess_image_cv(
+                image
+            )
+
+            try:
+
+                ocr_text = (
+                    pytesseract
+                    .image_to_string(
+                        image,
+                        config="--oem 3 --psm 6",
+                    )
+                )
+
+            except (
+                pytesseract
+                .TesseractNotFoundError
+            ) as exc:
+
+                document.close()
+
+                raise ValueError(
+                    (
+                        "PDF has no extractable text "
+                        "and Tesseract OCR is not available."
+                    )
+                ) from exc
 
             if ocr_text.strip():
 

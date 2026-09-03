@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
-    TESSERACT_CMD: str | None = None
+    TESSERACT_CMD: str = "/usr/bin/tesseract"
 
     model_config = SettingsConfigDict(
         env_file=".env",

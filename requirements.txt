@@ -48,10 +48,6 @@ pydantic_core==2.46.4
 pymupdf==1.28.0
 pypdf==6.16.1
 pypdfium2==5.11.0
-rapidocr-onnxruntime==1.4.4
-onnxruntime==1.29.0
-pyclipper==1.4.0
-shapely==2.1.2
 pytesseract==0.3.13
 python-bidi==0.6.11
 python-dateutil==2.9.0.post0
