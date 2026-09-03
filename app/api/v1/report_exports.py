@@ -102,6 +102,139 @@ def get_next_month(year, month):
     )
 
 
+def calculate_student_lifecycle_fee(
+    student: Student,
+    batch: Batch,
+    target_year: int,
+    target_month: int,
+    all_payments: list[FeePayment],
+    today: date,
+) -> dict:
+    """
+    Calculates student fee statistics from their join date up to the target month/year:
+    - total_due_months: billing months between join_date and target (year, month)
+    - months_paid_count: count of months with full fee paid
+    - unpaid_months_count: count of overdue / unpaid months
+    - total_pending_amount: cumulative overdue balance
+    - fee_status: status for target month (PAID, OVERDUE, DUE TODAY, UNPAID, NOT JOINED)
+    - target_paid_amount: amount paid for target month
+    - target_pending_amount: balance due for target month
+    - target_paid_date, target_payment_method
+    """
+    monthly_fee = int(
+        student.monthly_fee
+        if (student.monthly_fee is not None and student.monthly_fee > 0)
+        else (batch.monthly_fee or 0)
+    )
+
+    join_date = student.join_date or (
+        student.created_at.date()
+        if getattr(student, "created_at", None)
+        else date(target_year, target_month, 1)
+    )
+
+    # Group all payments by (fee_year, fee_month)
+    paid_map: dict[tuple[int, int], dict] = {}
+    lifetime_total_paid = 0
+
+    for p in all_payments:
+        amt = int(p.net_payable or 0)
+        lifetime_total_paid += amt
+        if p.fee_year and p.fee_month:
+            k = (p.fee_year, p.fee_month)
+            if k not in paid_map:
+                paid_map[k] = {"total": 0, "payments": []}
+            paid_map[k]["total"] += amt
+            paid_map[k]["payments"].append(p)
+
+    target_period = (target_year, target_month)
+    join_period = (join_date.year, join_date.month)
+
+    total_due_months = 0
+    months_paid_count = 0
+    unpaid_months_count = 0
+    total_pending_amount = 0
+
+    if join_period <= target_period:
+        curr_y = join_date.year
+        curr_m = join_date.month
+
+        while (curr_y < target_year) or (curr_y == target_year and curr_m <= target_month):
+            total_due_months += 1
+            month_info = paid_map.get((curr_y, curr_m), {"total": 0, "payments": []})
+            paid_for_m = month_info["total"]
+
+            if (monthly_fee > 0 and paid_for_m >= monthly_fee) or (monthly_fee == 0 and (paid_for_m > 0 or len(month_info["payments"]) > 0)):
+                months_paid_count += 1
+            else:
+                unpaid_months_count += 1
+                total_pending_amount += max(0, monthly_fee - paid_for_m)
+
+            if curr_m == 12:
+                curr_y += 1
+                curr_m = 1
+            else:
+                curr_m += 1
+
+    # Selected / Target Month Specifics
+    target_info = paid_map.get(target_period, {"total": 0, "payments": []})
+    target_paid_amt = target_info["total"]
+    target_payments = target_info["payments"]
+
+    # Target payment details (latest payment for that month)
+    latest_target_payment = target_payments[0] if target_payments else None
+    target_paid_date = format_date(latest_target_payment.payment_date) if (latest_target_payment and latest_target_payment.payment_date) else ""
+    target_payment_method = str(latest_target_payment.payment_method) if (latest_target_payment and latest_target_payment.payment_method) else ""
+
+    due_date = date(target_year, target_month, 1)
+
+    if join_period > target_period:
+        fee_status = "NOT JOINED"
+        target_pending_amt = 0
+    elif (monthly_fee > 0 and target_paid_amt >= monthly_fee) or (monthly_fee == 0 and (target_paid_amt > 0 or len(target_payments) > 0)):
+        fee_status = "PAID"
+        target_pending_amt = 0
+    else:
+        target_pending_amt = max(0, monthly_fee - target_paid_amt)
+        if today > due_date:
+            fee_status = "OVERDUE"
+        elif today == due_date:
+            fee_status = "DUE TODAY"
+        else:
+            fee_status = "UNPAID"
+
+    # Most recent payment ever made by student
+    last_payment = all_payments[0] if all_payments else None
+    last_paid_amount = int(last_payment.net_payable or 0) if last_payment else 0
+    last_paid_month = (
+        f"{month_name(last_payment.fee_month)} {last_payment.fee_year or ''}".strip()
+        if (last_payment and last_payment.fee_month)
+        else "-"
+    )
+    last_paid_date = (
+        format_date(last_payment.payment_date)
+        if (last_payment and last_payment.payment_date)
+        else "-"
+    )
+
+    return {
+        "monthly_fee": monthly_fee,
+        "fee_status": fee_status,
+        "total_due_months": total_due_months,
+        "months_paid_count": months_paid_count,
+        "unpaid_months_count": unpaid_months_count,
+        "total_pending_amount": total_pending_amount,
+        "target_paid_amount": target_paid_amt,
+        "target_pending_amount": target_pending_amt,
+        "target_paid_date": target_paid_date,
+        "target_payment_method": target_payment_method,
+        "last_paid_amount": last_paid_amount,
+        "last_paid_month": last_paid_month,
+        "last_paid_date": last_paid_date,
+        "lifetime_total_paid": lifetime_total_paid,
+    }
+
+
 # =========================================================
 # GENERIC EXCEL EXPORT
 # =========================================================
@@ -520,6 +653,7 @@ def create_student_pdf(
     students_data: list[dict],
     is_multi_batch: bool = False,
     batches_data: dict | None = None,
+    month_label: str | None = None,
 ):
 
     from reportlab.lib import colors
@@ -545,8 +679,8 @@ def create_student_pdf(
     document = SimpleDocTemplate(
         output,
         pagesize=landscape(A4),
-        leftMargin=10 * mm,
-        rightMargin=10 * mm,
+        leftMargin=8 * mm,
+        rightMargin=8 * mm,
         topMargin=8 * mm,
         bottomMargin=8 * mm,
     )
@@ -574,8 +708,8 @@ def create_student_pdf(
     header_cell_style = ParagraphStyle(
         "HeaderCell",
         fontName="Helvetica-Bold",
-        fontSize=6.8,
-        leading=8.5,
+        fontSize=5.6,
+        leading=7.0,
         textColor=colors.white,
         alignment=1,
     )
@@ -583,8 +717,8 @@ def create_student_pdf(
     cell_style = ParagraphStyle(
         "BodyCell",
         fontName="Helvetica",
-        fontSize=6.5,
-        leading=8,
+        fontSize=5.3,
+        leading=6.8,
         textColor=colors.HexColor("#1F2937"),
         alignment=1,
     )
@@ -592,8 +726,8 @@ def create_student_pdf(
     cell_style_left = ParagraphStyle(
         "BodyCellLeft",
         fontName="Helvetica",
-        fontSize=6.5,
-        leading=8,
+        fontSize=5.3,
+        leading=6.8,
         textColor=colors.HexColor("#1F2937"),
         alignment=0,
     )
@@ -638,6 +772,16 @@ def create_student_pdf(
         if str(s.get("status", "")).upper() == "ACTIVE"
     )
     inactive_count = total_students - active_count
+    paid_count = sum(
+        1
+        for s in students_data
+        if str(s.get("fee_status", "")).upper() == "PAID"
+    )
+    pending_count = total_students - paid_count
+    total_pending_amount = sum(
+        int(s.get("total_pending_amount", 0))
+        for s in students_data
+    )
 
     filter_text = (
         status_filter.upper()
@@ -655,17 +799,20 @@ def create_student_pdf(
                 location or ("All Locations" if is_multi_batch else "N/A"),
                 meta_value_style,
             ),
-            Paragraph("Generated Date:", meta_label_style),
-            Paragraph(today_str, meta_value_style),
+            Paragraph("Target Month:", meta_label_style),
+            Paragraph(month_label or today_str, meta_value_highlight),
         ],
         [
             Paragraph("Status Filter:", meta_label_style),
             Paragraph(filter_text, meta_value_style),
             Paragraph("Total Students:", meta_label_style),
-            Paragraph(str(total_students), meta_value_style),
-            Paragraph("Active / Inactive:", meta_label_style),
             Paragraph(
-                f"<font color='#047857'><b>{active_count} Active</b></font> / <font color='#B91C1C'><b>{inactive_count} Inactive</b></font>",
+                f"<b>{total_students}</b> (<font color='#047857'>{active_count} Active</font> / <font color='#B91C1C'>{inactive_count} Inactive</font>)",
+                meta_value_style,
+            ),
+            Paragraph("Fee Summary:", meta_label_style),
+            Paragraph(
+                f"<font color='#047857'><b>{paid_count} Paid</b></font> / <font color='#B91C1C'><b>{pending_count} Pending</b></font> (Due: <b>Rs. {total_pending_amount:,}</b>)",
                 meta_value_style,
             ),
         ],
@@ -704,25 +851,30 @@ def create_student_pdf(
         output.seek(0)
         return output
 
-    # 3. Table Column Widths (Total: 277 mm)
+    # 3. Table Column Widths (Total: 264.5 mm, landscape A4)
     col_widths = [
-        8 * mm,   # ID
-        30 * mm,  # Student Name
-        12 * mm,  # Gender
-        9 * mm,   # Age
-        17 * mm,  # DOB
-        11 * mm,  # Blood
-        17 * mm,  # Join Date
-        27 * mm,  # Parent Name
-        21 * mm,  # Phone
-        14 * mm,  # Status
-        18 * mm,  # Classes (Att/Cond)
-        17 * mm,  # Monthly Fee
-        17 * mm,  # Fee Status
-        15 * mm,  # Paid Amt
-        15 * mm,  # Pending
-        17 * mm,  # Paid Date
-        12 * mm,  # Method
+        6.5 * mm,   # ID
+        23 * mm,    # Student Name
+        9 * mm,     # Gender
+        6 * mm,     # Age
+        13.5 * mm,  # DOB
+        8.5 * mm,   # Blood
+        13.5 * mm,  # Join Date
+        19 * mm,    # Parent Name
+        16.5 * mm,  # Phone
+        11 * mm,    # Status
+        13.5 * mm,  # Classes (Att/Cond)
+        12 * mm,    # Monthly Fee
+        12.5 * mm,  # Fee Status
+        11 * mm,    # Paid Amt
+        11 * mm,    # Pending
+        13.5 * mm,  # Paid Date
+        10 * mm,    # Method
+        13.5 * mm,  # Months (Paid/Due)
+        11 * mm,    # Months Overdue
+        13.5 * mm,  # Total Pending
+        12.5 * mm,  # Last Paid Amt
+        14 * mm,    # Last Paid Month
     ]
 
     headers = [
@@ -739,10 +891,15 @@ def create_student_pdf(
         "Classes<br/>(Att/Cond)",
         "Monthly<br/>Fee",
         "Fee Status",
-        "Paid Amt",
+        "Paid<br/>Amt",
         "Pending",
         "Paid Date",
         "Method",
+        "Months<br/>(Paid/Due)",
+        "Months<br/>Overdue",
+        "Total<br/>Pending",
+        "Last Paid<br/>Amt",
+        "Last Paid<br/>Month",
     ]
 
     def build_table_for_students(student_group):
@@ -782,6 +939,34 @@ def create_student_pdf(
                 cell_style,
             )
 
+            months_paid = s.get("months_paid_count", 0)
+            total_due_mths = s.get("total_due_months", 0)
+            overdue_mths = s.get("unpaid_months_count", 0)
+            total_pending = int(s.get("total_pending_amount", 0))
+            paid_amount = int(s.get("paid_amount", 0))
+            pending_amount = int(s.get("pending_amount", 0))
+            last_paid_amount = int(s.get("last_paid_amount", 0))
+            last_paid_month_str = str(s.get("last_paid_month", "") or "-")
+
+            paid_due_para = Paragraph(
+                f"<b>{months_paid}</b>/{total_due_mths}",
+                cell_style,
+            )
+
+            overdue_para = Paragraph(
+                f"<font color='#B91C1C'><b>{overdue_mths}</b></font>" if overdue_mths > 0 else "<font color='#047857'>0</font>",
+                cell_style,
+            )
+
+            pending_total_para = Paragraph(
+                f"<font color='#B91C1C'><b>{total_pending:,}</b></font>" if total_pending > 0 else "0",
+                cell_style,
+            )
+
+            month_paid_str = f"{paid_amount:,}" if paid_amount > 0 else "-"
+            month_pending_str = f"{pending_amount:,}" if pending_amount > 0 else "0"
+            last_paid_amt_str = f"{last_paid_amount:,}" if last_paid_amount > 0 else "-"
+
             t_data.append(
                 [
                     Paragraph(str(s.get("id", "")), cell_style),
@@ -797,10 +982,15 @@ def create_student_pdf(
                     Paragraph(f"<b>{classes_str}</b>", cell_style),
                     Paragraph(str(s.get("monthly_fee", 0)), cell_style),
                     fee_status_para,
-                    Paragraph(str(s.get("paid_amount", 0)), cell_style),
-                    Paragraph(str(s.get("pending_amount", 0)), cell_style),
+                    Paragraph(month_paid_str, cell_style),
+                    Paragraph(month_pending_str, cell_style),
                     Paragraph(str(s.get("paid_date", "") or "-"), cell_style),
                     Paragraph(str(s.get("payment_method", "") or "-"), cell_style),
+                    paid_due_para,
+                    overdue_para,
+                    pending_total_para,
+                    Paragraph(last_paid_amt_str, cell_style),
+                    Paragraph(last_paid_month_str, cell_style),
                 ]
             )
 
@@ -817,10 +1007,10 @@ def create_student_pdf(
                     ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                     ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
-                    ("LEFTPADDING", (0, 0), (-1, -1), 2),
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 1.5),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 1.5),
                     (
                         "ROWBACKGROUNDS",
                         (0, 1),
@@ -868,6 +1058,434 @@ def create_student_pdf(
 
 
 # =========================================================
+# SINGLE STUDENT PDF EXPORT
+# =========================================================
+
+
+def create_single_student_pdf(
+    student_data: dict,
+    monthly_ledger: list[dict],
+    payment_history: list[dict],
+) -> BytesIO:
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import (
+        getSampleStyleSheet,
+        ParagraphStyle,
+    )
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Table,
+        TableStyle,
+        Paragraph,
+        Spacer,
+        HRFlowable,
+    )
+
+    output = BytesIO()
+
+    document = SimpleDocTemplate(
+        output,
+        pagesize=A4,
+        leftMargin=10 * mm,
+        rightMargin=10 * mm,
+        topMargin=10 * mm,
+        bottomMargin=10 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+
+    # Styles
+    title_style = ParagraphStyle(
+        "SingleStudentReportTitle",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=15,
+        leading=18,
+        textColor=colors.HexColor("#1E3A8A"),
+        spaceAfter=0,
+    )
+
+    subtitle_style = ParagraphStyle(
+        "SingleStudentReportSubtitle",
+        fontName="Helvetica",
+        fontSize=8.5,
+        leading=11,
+        textColor=colors.HexColor("#64748B"),
+    )
+
+    section_header_style = ParagraphStyle(
+        "SectionHeader",
+        fontName="Helvetica-Bold",
+        fontSize=10,
+        leading=13,
+        textColor=colors.HexColor("#1E293B"),
+    )
+
+    label_style = ParagraphStyle(
+        "FieldLabel",
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#475569"),
+    )
+
+    val_style = ParagraphStyle(
+        "FieldValue",
+        fontName="Helvetica",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    val_bold = ParagraphStyle(
+        "FieldValueBold",
+        fontName="Helvetica-Bold",
+        fontSize=7.5,
+        leading=9.5,
+        textColor=colors.HexColor("#0F172A"),
+    )
+
+    header_cell_style = ParagraphStyle(
+        "THeaderCell",
+        fontName="Helvetica-Bold",
+        fontSize=7.2,
+        leading=9.0,
+        textColor=colors.white,
+        alignment=1,
+    )
+
+    cell_style = ParagraphStyle(
+        "TCell",
+        fontName="Helvetica",
+        fontSize=6.8,
+        leading=8.5,
+        textColor=colors.HexColor("#1E293B"),
+        alignment=1,
+    )
+
+    cell_style_left = ParagraphStyle(
+        "TCellLeft",
+        fontName="Helvetica",
+        fontSize=6.8,
+        leading=8.5,
+        textColor=colors.HexColor("#1E293B"),
+        alignment=0,
+    )
+
+    story = []
+
+    # 1. Header Title & Meta
+    header_table = Table(
+        [
+            [
+                Paragraph("<b>SKATING ACADEMY</b>", title_style),
+                Paragraph(f"<b>Generated:</b> {date.today().strftime('%d %b %Y')}", ParagraphStyle("GenDate", parent=subtitle_style, alignment=2)),
+            ],
+            [
+                Paragraph("Student Profile & Comprehensive Statement", subtitle_style),
+                Paragraph(f"<b>Target Month:</b> {student_data.get('month_label', '-')}", ParagraphStyle("TMonth", parent=subtitle_style, alignment=2)),
+            ],
+        ],
+        colWidths=[110 * mm, 80 * mm],
+    )
+    header_table.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ])
+    )
+    story.append(header_table)
+    story.append(Spacer(1, 2 * mm))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#CBD5E1"), spaceAfter=3 * mm))
+
+    # 2. Student Profile Card
+    status_str = str(student_data.get("status", "ACTIVE")).upper()
+    status_html = "<font color='#047857'><b>ACTIVE</b></font>" if status_str == "ACTIVE" else "<font color='#B91C1C'><b>INACTIVE</b></font>"
+
+    profile_rows = [
+        [
+            Paragraph("Student Name:", label_style),
+            Paragraph(f"<b>{student_data.get('name', '-')}</b>", val_bold),
+            Paragraph("Student ID:", label_style),
+            Paragraph(str(student_data.get("id", "-")), val_style),
+            Paragraph("Status:", label_style),
+            Paragraph(status_html, val_style),
+        ],
+        [
+            Paragraph("Gender / Age:", label_style),
+            Paragraph(f"{student_data.get('gender', '-')} / {student_data.get('age', '-')} yrs", val_style),
+            Paragraph("Date of Birth:", label_style),
+            Paragraph(str(student_data.get("dob", "-")), val_style),
+            Paragraph("Blood Group:", label_style),
+            Paragraph(str(student_data.get("blood_group", "-") or "-"), val_style),
+        ],
+        [
+            Paragraph("Batch Name:", label_style),
+            Paragraph(f"<b>{student_data.get('batch_name', '-')}</b>", val_style),
+            Paragraph("Location:", label_style),
+            Paragraph(str(student_data.get("location", "-")), val_style),
+            Paragraph("Join Date:", label_style),
+            Paragraph(str(student_data.get("join_date", "-")), val_style),
+        ],
+        [
+            Paragraph("Parent Name:", label_style),
+            Paragraph(str(student_data.get("parent_name", "-")), val_style),
+            Paragraph("Phone:", label_style),
+            Paragraph(str(student_data.get("phone", "-")), val_style),
+            Paragraph("Emergency Contact:", label_style),
+            Paragraph(str(student_data.get("emergency_contact", "-") or "-"), val_style),
+        ],
+    ]
+
+    profile_table = Table(
+        profile_rows,
+        colWidths=[24 * mm, 42 * mm, 24 * mm, 38 * mm, 28 * mm, 34 * mm],
+    )
+    profile_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#E2E8F0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3.5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3.5),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ])
+    )
+    story.append(profile_table)
+    story.append(Spacer(1, 3 * mm))
+
+    # 3. KPI / Summary Cards (Attendance & Fee Lifecycle)
+    att_pct = student_data.get("attendance_percentage", 0)
+    attended = student_data.get("attended", 0)
+    conducted = student_data.get("conducted", 0)
+    absent = student_data.get("absent", 0)
+
+    m_fee = student_data.get("monthly_fee", 0)
+    paid_mths = student_data.get("months_paid_count", 0)
+    due_mths = student_data.get("total_due_months", 0)
+    overdue_mths = student_data.get("unpaid_months_count", 0)
+    tot_pending = student_data.get("total_pending_amount", 0)
+    lifetime_paid = student_data.get("lifetime_total_paid", 0)
+    curr_fee_status = str(student_data.get("fee_status", "UNPAID")).upper()
+
+    if curr_fee_status == "PAID":
+        fee_badge = "<font color='#047857'><b>PAID</b></font>"
+    elif curr_fee_status in ("OVERDUE", "UNPAID"):
+        fee_badge = "<font color='#B91C1C'><b>OVERDUE</b></font>"
+    elif curr_fee_status == "DUE TODAY":
+        fee_badge = "<font color='#D97706'><b>DUE TODAY</b></font>"
+    else:
+        fee_badge = f"<b>{curr_fee_status}</b>"
+
+    kpi_rows = [
+        [
+            Paragraph("<b>ATTENDANCE SUMMARY</b>", ParagraphStyle("KPIHead1", parent=label_style, textColor=colors.HexColor("#1E3A8A"))),
+            Paragraph("<b>FEE & PAYMENT LIFECYCLE</b>", ParagraphStyle("KPIHead2", parent=label_style, textColor=colors.HexColor("#1E3A8A"))),
+        ],
+        [
+            Paragraph(
+                f"• <b>Attendance Rate:</b> {att_pct}%<br/>"
+                f"• <b>Classes Conducted:</b> {conducted}<br/>"
+                f"• <b>Attended:</b> <font color='#047857'><b>{attended}</b></font> &nbsp;|&nbsp; <b>Absent:</b> <font color='#B91C1C'><b>{absent}</b></font>",
+                val_style,
+            ),
+            Paragraph(
+                f"• <b>Monthly Fee:</b> Rs. {m_fee:,} &nbsp;|&nbsp; <b>Target Month Status:</b> {fee_badge}<br/>"
+                f"• <b>Billing Months:</b> <b>{paid_mths}</b> / {due_mths} Paid &nbsp;|&nbsp; <b>Overdue:</b> <font color='#B91C1C'><b>{overdue_mths} Months</b></font><br/>"
+                f"• <b>Lifetime Total Paid:</b> <font color='#047857'><b>Rs. {lifetime_paid:,}</b></font> &nbsp;|&nbsp; <b>Total Pending:</b> <font color='#B91C1C'><b>Rs. {tot_pending:,}</b></font>",
+                val_style,
+            ),
+        ],
+    ]
+
+    kpi_table = Table(
+        kpi_rows,
+        colWidths=[80 * mm, 110 * mm],
+    )
+    kpi_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#EFF6FF")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#BFDBFE")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#DBEAFE")),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 5),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ])
+    )
+    story.append(kpi_table)
+    story.append(Spacer(1, 4 * mm))
+
+    # 4. Section: Month-by-Month Fee Statement Table
+    story.append(Paragraph("<b>1. Month-by-Month Fee Statement</b>", section_header_style))
+    story.append(Spacer(1, 1.5 * mm))
+
+    ledger_headers = [
+        "Month & Year",
+        "Fee Due",
+        "Paid Amt",
+        "Pending",
+        "Fee Status",
+        "Paid Date",
+        "Method",
+    ]
+    ledger_col_widths = [
+        32 * mm,
+        22 * mm,
+        22 * mm,
+        25 * mm,
+        25 * mm,
+        32 * mm,
+        32 * mm,
+    ]
+
+    ledger_data = [
+        [Paragraph(h, header_cell_style) for h in ledger_headers]
+    ]
+
+    for row in monthly_ledger:
+        st_val = str(row.get("Status", "UNPAID")).upper()
+        if st_val == "PAID":
+            st_color = "#047857"
+        elif st_val in ("OVERDUE", "UNPAID"):
+            st_color = "#B91C1C"
+        elif st_val == "DUE TODAY":
+            st_color = "#D97706"
+        else:
+            st_color = "#475569"
+
+        st_para = Paragraph(f"<font color='{st_color}'><b>{st_val}</b></font>", cell_style)
+        due_amt = int(row.get("Fee Amount", 0))
+        paid_amt = int(row.get("Paid Amount", 0))
+        pending_amt = int(row.get("Pending Amount", 0))
+
+        paid_str = f"Rs. {paid_amt:,}" if paid_amt > 0 else "-"
+        pending_str = f"<font color='#B91C1C'><b>Rs. {pending_amt:,}</b></font>" if pending_amt > 0 else "Rs. 0"
+
+        ledger_data.append([
+            Paragraph(str(row.get("Month & Year", "-")), cell_style_left),
+            Paragraph(f"Rs. {due_amt:,}", cell_style),
+            Paragraph(paid_str, cell_style),
+            Paragraph(pending_str, cell_style),
+            st_para,
+            Paragraph(str(row.get("Paid Date", "-")), cell_style),
+            Paragraph(str(row.get("Payment Method", "-")), cell_style),
+        ])
+
+    ledger_table = Table(
+        ledger_data,
+        colWidths=ledger_col_widths,
+        repeatRows=1,
+    )
+    ledger_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+            ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+            ("LEFTPADDING", (0, 0), (-1, -1), 2),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+            (
+                "ROWBACKGROUNDS",
+                (0, 1),
+                (-1, -1),
+                [
+                    colors.white,
+                    colors.HexColor("#F8FAFC"),
+                ],
+            ),
+        ])
+    )
+    story.append(ledger_table)
+    story.append(Spacer(1, 4 * mm))
+
+    # 5. Section: Payment Transaction History
+    story.append(Paragraph("<b>2. Payment Receipts & Transaction History</b>", section_header_style))
+    story.append(Spacer(1, 1.5 * mm))
+
+    if payment_history:
+        p_headers = [
+            "Receipt ID",
+            "Payment Date",
+            "Fee Month",
+            "Fee Year",
+            "Amount Paid",
+            "Method",
+            "Status",
+        ]
+        p_col_widths = [
+            22 * mm,
+            36 * mm,
+            30 * mm,
+            22 * mm,
+            30 * mm,
+            28 * mm,
+            22 * mm,
+        ]
+
+        p_data = [
+            [Paragraph(h, header_cell_style) for h in p_headers]
+        ]
+
+        for p_item in payment_history:
+            amt = int(p_item.get("Amount", 0))
+            p_data.append([
+                Paragraph(str(p_item.get("Payment ID", "-")), cell_style),
+                Paragraph(str(p_item.get("Payment Date", "-")), cell_style),
+                Paragraph(str(p_item.get("Fee Month", "-")), cell_style),
+                Paragraph(str(p_item.get("Fee Year", "-")), cell_style),
+                Paragraph(f"<b>Rs. {amt:,}</b>", cell_style),
+                Paragraph(str(p_item.get("Payment Method", "-")), cell_style),
+                Paragraph("<font color='#047857'><b>PAID</b></font>", cell_style),
+            ])
+
+        p_table = Table(
+            p_data,
+            colWidths=p_col_widths,
+            repeatRows=1,
+        )
+        p_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [
+                        colors.white,
+                        colors.HexColor("#F8FAFC"),
+                    ],
+                ),
+            ])
+        )
+        story.append(p_table)
+    else:
+        story.append(Paragraph("<i>No payment transactions recorded yet.</i>", subtitle_style))
+
+    document.build(story)
+    output.seek(0)
+    return output
+
+
+# =========================================================
 # BATCH PDF EXPORT
 # =========================================================
 
@@ -875,6 +1493,7 @@ def create_student_pdf(
 def create_batch_pdf(
     batches_data: list[dict],
     batch_filter_name: str | None = None,
+    month_label: str | None = None,
 ) -> BytesIO:
 
     from reportlab.lib import colors
@@ -990,13 +1609,13 @@ def create_batch_pdf(
             Paragraph(filter_text, meta_value_highlight),
             Paragraph("Total Batches:", meta_label_style),
             Paragraph(str(total_batches), meta_value_style),
-            Paragraph("Generated Date:", meta_label_style),
-            Paragraph(today_str, meta_value_style),
+            Paragraph("Target Month:", meta_label_style),
+            Paragraph(month_label or today_str, meta_value_highlight),
         ],
         [
             Paragraph("Total Students:", meta_label_style),
             Paragraph(str(total_students), meta_value_style),
-            Paragraph("This Month Revenue:", meta_label_style),
+            Paragraph("Month Revenue:", meta_label_style),
             Paragraph(f"<font color='#047857'><b>Rs. {total_revenue:,}</b></font>", meta_value_style),
             Paragraph("Total Pending Fees:", meta_label_style),
             Paragraph(f"<font color='#B91C1C'><b>Rs. {total_pending:,}</b></font>", meta_value_style),
@@ -1665,10 +2284,29 @@ def export_student_report(
     batch_id: int | None = Query(
         default=None,
         gt=0,
+        description="Filter by batch ID",
+    ),
+
+    month: int | None = Query(
+        default=None,
+        ge=1,
+        le=12,
+        description="Target fee month (1-12, defaults to current month)",
+    ),
+
+    year: int | None = Query(
+        default=None,
+        description="Target fee year (defaults to current year)",
     ),
 
     status: str | None = Query(
-        default=None
+        default=None,
+        description="Status filter: active | inactive | paid | overdue | due_today | unpaid | all",
+    ),
+
+    fee_status: str | None = Query(
+        default=None,
+        description="Explicit fee status filter: paid | overdue | due_today | unpaid | all",
     ),
 
     format: str = Query(
@@ -1682,6 +2320,28 @@ def export_student_report(
         get_current_admin
     ),
 ):
+
+    today = date.today()
+    target_month = month or today.month
+    target_year = year or today.year
+    target_month_label = f"{month_name(target_month)} {target_year}"
+
+    # Determine student active/inactive filter
+    effective_status = (status or "").strip().lower()
+    effective_fee_status = (fee_status or "").strip().lower()
+
+    if effective_status in ("active", "inactive"):
+        active_filter = effective_status
+    else:
+        active_filter = None
+
+    # Determine fee status filter
+    if effective_fee_status in ("paid", "overdue", "due_today", "due today", "unpaid"):
+        target_fee_filter = effective_fee_status.replace(" ", "_")
+    elif effective_status in ("paid", "overdue", "due_today", "due today", "unpaid"):
+        target_fee_filter = effective_status.replace(" ", "_")
+    else:
+        target_fee_filter = None
 
     query = (
         db.query(
@@ -1702,19 +2362,17 @@ def export_student_report(
             == batch_id
         )
 
-    if status:
+    if active_filter == "active":
 
-        if status.lower() == "active":
+        query = query.filter(
+            Student.is_active.is_(True)
+        )
 
-            query = query.filter(
-                Student.is_active.is_(True)
-            )
+    elif active_filter == "inactive":
 
-        elif status.lower() == "inactive":
-
-            query = query.filter(
-                Student.is_active.is_(False)
-            )
+        query = query.filter(
+            Student.is_active.is_(False)
+        )
 
     students = (
         query
@@ -1727,11 +2385,6 @@ def export_student_report(
     rows = []
     payment_rows = []
     pdf_student_items = []
-
-    today = date.today()
-
-    current_month = today.month
-    current_year = today.year
 
     for student, batch in students:
 
@@ -1822,108 +2475,64 @@ def export_student_report(
         )
 
         # -------------------------------------------------
-        # CURRENT PAYMENT
+        # ALL STUDENT PAYMENTS
         # -------------------------------------------------
 
-        payment = (
-            db.query(FeePayment)
-            .filter(
-                FeePayment.student_id
-                == student.id,
-
-                FeePayment.fee_month
-                == current_month,
-
-                FeePayment.fee_year
-                == current_year,
-            )
-            .order_by(
-                FeePayment.payment_date.desc()
-            )
-            .first()
-        )
-
-        monthly_fee = int(
-            student.monthly_fee
-            or batch.monthly_fee
-            or 0
-        )
-
-        if payment:
-
-            fee_status = "PAID"
-
-            paid_amount = int(
-                payment.net_payable
-                or 0
-            )
-
-            paid_date = format_date(
-                payment.payment_date
-            )
-
-            payment_method = str(
-                payment.payment_method
-            )
-
-            pending_amount = 0
-
-        else:
-
-            paid_amount = 0
-
-            paid_date = ""
-
-            payment_method = ""
-
-            pending_amount = monthly_fee
-
-            due_day = 1
-
-            due_date = date(
-                current_year,
-                current_month,
-                due_day,
-            )
-
-            if today > due_date:
-
-                fee_status = "OVERDUE"
-
-            elif today == due_date:
-
-                fee_status = "DUE TODAY"
-
-            else:
-
-                fee_status = "UNPAID"
-
-        # -------------------------------------------------
-        # PAYMENT HISTORY
-        # -------------------------------------------------
-
-        payments = (
+        all_student_payments = (
             db.query(FeePayment)
             .filter(
                 FeePayment.student_id
                 == student.id
             )
             .order_by(
-                FeePayment.payment_date.desc()
+                FeePayment.payment_date.desc(),
+                FeePayment.id.desc(),
             )
             .all()
         )
 
-        total_paid = 0
+        # -------------------------------------------------
+        # LIFECYCLE & TARGET MONTH FEE CALCULATION
+        # -------------------------------------------------
 
-        for payment_item in payments:
+        fee_data = calculate_student_lifecycle_fee(
+            student=student,
+            batch=batch,
+            target_year=target_year,
+            target_month=target_month,
+            all_payments=all_student_payments,
+            today=today,
+        )
 
-            amount = int(
-                payment_item.net_payable
-                or 0
-            )
+        curr_fee_status = fee_data["fee_status"]
 
-            total_paid += amount
+        # Apply fee status filtering if requested
+        if target_fee_filter:
+            if target_fee_filter == "paid" and curr_fee_status != "PAID":
+                continue
+            elif target_fee_filter == "overdue" and curr_fee_status != "OVERDUE":
+                continue
+            elif target_fee_filter == "due_today" and curr_fee_status != "DUE TODAY":
+                continue
+            elif target_fee_filter == "unpaid" and curr_fee_status not in ("OVERDUE", "DUE TODAY", "UNPAID"):
+                continue
+
+        monthly_fee = fee_data["monthly_fee"]
+        total_due_months = fee_data["total_due_months"]
+        months_paid_count = fee_data["months_paid_count"]
+        unpaid_months_count = fee_data["unpaid_months_count"]
+        total_pending_amount = fee_data["total_pending_amount"]
+        target_paid_amount = fee_data["target_paid_amount"]
+        target_pending_amount = fee_data["target_pending_amount"]
+        target_paid_date = fee_data["target_paid_date"]
+        target_payment_method = fee_data["target_payment_method"]
+        lifetime_total_paid = fee_data["lifetime_total_paid"]
+
+        # -------------------------------------------------
+        # PAYMENT HISTORY SHEET ROWS
+        # -------------------------------------------------
+
+        for payment_item in all_student_payments:
 
             payment_rows.append(
                 {
@@ -1948,7 +2557,10 @@ def export_student_report(
                         payment_item.fee_year,
 
                     "Amount":
-                        amount,
+                        int(
+                            payment_item.net_payable
+                            or 0
+                        ),
 
                     "Payment Method":
                         str(
@@ -1966,7 +2578,6 @@ def export_student_report(
             )
 
         # -------------------------------------------------
-        # -------------------------------------------------
         # PDF STUDENT ITEM
         # -------------------------------------------------
 
@@ -1977,7 +2588,7 @@ def export_student_report(
                 "name":
                     student.full_name,
                 "gender":
-                    student.gender,
+                    student.gender or "-",
                 "age":
                     calculate_age(
                         student.dob
@@ -1999,9 +2610,9 @@ def export_student_report(
                         student.join_date
                     ),
                 "parent_name":
-                    student.parent_name,
+                    student.parent_name or "-",
                 "phone":
-                    student.phone_number,
+                    student.phone_number or "-",
                 "status":
                     (
                         "ACTIVE"
@@ -2015,15 +2626,27 @@ def export_student_report(
                 "monthly_fee":
                     monthly_fee,
                 "fee_status":
-                    fee_status,
+                    curr_fee_status,
                 "paid_amount":
-                    paid_amount,
+                    target_paid_amount,
                 "pending_amount":
-                    pending_amount,
+                    target_pending_amount,
                 "paid_date":
-                    paid_date,
+                    target_paid_date,
                 "payment_method":
-                    payment_method,
+                    target_payment_method,
+                "total_due_months":
+                    total_due_months,
+                "months_paid_count":
+                    months_paid_count,
+                "unpaid_months_count":
+                    unpaid_months_count,
+                "total_pending_amount":
+                    total_pending_amount,
+                "last_paid_amount":
+                    fee_data.get("last_paid_amount", 0),
+                "last_paid_month":
+                    fee_data.get("last_paid_month", "-"),
             }
         )
 
@@ -2033,14 +2656,14 @@ def export_student_report(
 
         rows.append(
             {
-                "Student ID":
+                "ID":
                     student.id,
 
                 "Student Name":
                     student.full_name,
 
                 "Gender":
-                    student.gender,
+                    student.gender or "",
 
                 "Age":
                     calculate_age(
@@ -2052,15 +2675,8 @@ def export_student_report(
                         student.dob
                     ),
 
-                "Blood Group":
+                "Blood":
                     student.blood_group
-                    or "",
-
-                "Batch Name":
-                    batch.batch_name,
-
-                "Location":
-                    batch.location
                     or "",
 
                 "Join Date":
@@ -2069,59 +2685,53 @@ def export_student_report(
                     ),
 
                 "Parent Name":
-                    student.parent_name,
+                    student.parent_name or "",
 
                 "Phone":
-                    student.phone_number,
+                    student.phone_number or "",
 
-                "Emergency Contact":
-                    student.emergency_contact,
-
-                "Student Status":
+                "Status":
                     (
                         "ACTIVE"
                         if student.is_active
                         else "INACTIVE"
                     ),
 
-                "Classes Conducted":
-                    conducted,
-
-                "Classes Attended":
-                    attended,
-
-                "Classes Absent":
-                    absent,
-
                 "Classes (Att/Cond)":
                     f"{attended}/{conducted}",
-
-                "Attendance %":
-                    attendance_percentage,
 
                 "Monthly Fee":
                     monthly_fee,
 
-                "Current Fee Status":
-                    fee_status,
+                "Fee Status":
+                    curr_fee_status,
 
-                "Paid Amount":
-                    paid_amount,
+                "Paid Amt":
+                    target_paid_amount,
 
-                "Pending Amount":
-                    pending_amount,
+                "Pending":
+                    target_pending_amount,
 
                 "Paid Date":
-                    paid_date,
+                    target_paid_date,
 
-                "Payment Method":
-                    payment_method,
+                "Method":
+                    target_payment_method,
 
-                "Total Payments":
-                    len(payments),
+                "Months (Paid/Due)":
+                    f"{months_paid_count}/{total_due_months}",
 
-                "Total Paid":
-                    total_paid,
+                "Months Overdue":
+                    unpaid_months_count,
+
+                "Total Pending":
+                    total_pending_amount,
+
+                "Last Paid Amt":
+                    fee_data.get("last_paid_amount", 0),
+
+                "Last Paid Month":
+                    fee_data.get("last_paid_month", "-"),
             }
         )
 
@@ -2228,13 +2838,20 @@ def export_student_report(
 
                 batch_groups = unique_batches
 
+        effective_filter_label = (
+            f"{target_fee_filter.upper()} (Fee)"
+            if target_fee_filter
+            else (active_filter.upper() if active_filter else "ALL")
+        )
+
         output = create_student_pdf(
             batch_name=selected_batch_name,
             location=selected_location,
-            status_filter=status,
+            status_filter=effective_filter_label,
             students_data=pdf_student_items,
             is_multi_batch=is_multi,
             batches_data=batch_groups,
+            month_label=target_month_label,
         )
 
         return StreamingResponse(
@@ -2273,6 +2890,19 @@ def export_batch_report(
     batch_id: int | None = Query(
         default=None,
         gt=0,
+        description="Filter by batch ID",
+    ),
+
+    month: int | None = Query(
+        default=None,
+        ge=1,
+        le=12,
+        description="Target fee month (1-12, defaults to current month)",
+    ),
+
+    year: int | None = Query(
+        default=None,
+        description="Target fee year (defaults to current year)",
     ),
 
     format: str = Query(
@@ -2313,6 +2943,9 @@ def export_batch_report(
     pdf_batch_items = []
 
     today = date.today()
+    target_month = month or today.month
+    target_year = year or today.year
+    target_month_label = f"{month_name(target_month)} {target_year}"
 
     for batch in batches:
 
@@ -2414,11 +3047,8 @@ def export_batch_report(
         )
 
         # -------------------------------------------------
-        # CURRENT MONTH REVENUE
+        # TARGET MONTH REVENUE
         # -------------------------------------------------
-
-        current_month = today.month
-        current_year = today.year
 
         revenue = (
             db.query(
@@ -2439,17 +3069,17 @@ def export_batch_report(
                 == batch.id,
 
                 FeePayment.fee_month
-                == current_month,
+                == target_month,
 
                 FeePayment.fee_year
-                == current_year,
+                == target_year,
             )
             .scalar()
             or 0
         )
 
         # -------------------------------------------------
-        # PENDING FEES
+        # PENDING FEES (TARGET MONTH)
         # -------------------------------------------------
 
         batch_students = (
@@ -2474,10 +3104,10 @@ def export_batch_report(
                     == student.id,
 
                     FeePayment.fee_month
-                    == current_month,
+                    == target_month,
 
                     FeePayment.fee_year
-                    == current_year,
+                    == target_year,
                 )
                 .first()
             )
@@ -2590,7 +3220,10 @@ def export_batch_report(
                 "Attendance %":
                     attendance_percentage,
 
-                "This Month Revenue":
+                "Target Month":
+                    target_month_label,
+
+                "Month Revenue":
                     int(revenue),
 
                 "Pending Fees":
@@ -2607,6 +3240,7 @@ def export_batch_report(
         output = create_batch_pdf(
             batches_data=pdf_batch_items,
             batch_filter_name=batch_filter_name,
+            month_label=target_month_label,
         )
 
         return StreamingResponse(
@@ -2626,4 +3260,322 @@ def export_batch_report(
         format,
         "batch-report",
         "Batch Report",
+    )
+
+
+# =========================================================
+# 5. SINGLE STUDENT EXPORT
+# =========================================================
+
+
+@router.get(
+    "/students/{student_id}/export"
+)
+def export_single_student_report(
+    student_id: int,
+
+    month: int | None = Query(
+        default=None,
+        ge=1,
+        le=12,
+        description="Target fee month (1-12, defaults to current month)",
+    ),
+
+    year: int | None = Query(
+        default=None,
+        description="Target fee year (defaults to current year)",
+    ),
+
+    format: str = Query(
+        default="pdf",
+        pattern="^(xlsx|pdf|csv)$",
+        description="Export format: pdf | xlsx | csv",
+    ),
+
+    db: Session = Depends(get_db),
+
+    current_admin: Admin = Depends(
+        get_current_admin
+    ),
+):
+    student = (
+        db.query(Student)
+        .filter(Student.id == student_id)
+        .first()
+    )
+
+    if not student:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Student with ID {student_id} not found",
+        )
+
+    batch = (
+        db.query(Batch)
+        .filter(Batch.id == student.batch_id)
+        .first()
+    )
+
+    today = date.today()
+    target_month = month or today.month
+    target_year = year or today.year
+    target_month_label = f"{month_name(target_month)} {target_year}"
+
+    # -------------------------------------------------
+    # COMPLETED CLASSES & ATTENDANCE
+    # -------------------------------------------------
+    session_query = (
+        db.query(SessionModel)
+        .filter(
+            SessionModel.batch_id == student.batch_id,
+            SessionModel.status == "COMPLETED",
+            SessionModel.session_date <= today,
+        )
+    )
+
+    if student.join_date:
+        session_query = session_query.filter(
+            SessionModel.session_date >= student.join_date
+        )
+
+    sessions = (
+        session_query
+        .order_by(SessionModel.session_date.desc())
+        .all()
+    )
+
+    conducted = len(sessions)
+    session_ids = [session.id for session in sessions]
+
+    attended = 0
+    attended_session_ids = set()
+    if session_ids:
+        attendances = (
+            db.query(Attendance)
+            .filter(
+                Attendance.student_id == student.id,
+                Attendance.session_id.in_(session_ids),
+                Attendance.status == "Present",
+            )
+            .all()
+        )
+        attended = len(attendances)
+        attended_session_ids = {att.session_id for att in attendances}
+
+    absent = max(conducted - attended, 0)
+    attendance_percentage = (
+        round((attended / conducted) * 100, 2)
+        if conducted
+        else 0
+    )
+
+    attendance_logs = []
+    for s_item in sessions:
+        is_pres = s_item.id in attended_session_ids
+        attendance_logs.append(
+            {
+                "Session ID": s_item.id,
+                "Session Date": format_date(s_item.session_date),
+                "Topic / Note": getattr(s_item, "topic", None) or getattr(s_item, "notes", None) or "-",
+                "Status": "PRESENT" if is_pres else "ABSENT",
+            }
+        )
+
+    # -------------------------------------------------
+    # PAYMENTS & LIFECYCLE LEDGER
+    # -------------------------------------------------
+    all_payments = (
+        db.query(FeePayment)
+        .filter(FeePayment.student_id == student.id)
+        .order_by(
+            FeePayment.payment_date.desc(),
+            FeePayment.id.desc(),
+        )
+        .all()
+    )
+
+    lifecycle_data = calculate_student_lifecycle_fee(
+        student=student,
+        batch=batch,
+        target_year=target_year,
+        target_month=target_month,
+        all_payments=all_payments,
+        today=today,
+    )
+
+    # Group all payments by (fee_year, fee_month)
+    paid_map: dict[tuple[int, int], dict] = {}
+    for p in all_payments:
+        amt = int(p.net_payable or 0)
+        if p.fee_year and p.fee_month:
+            k = (p.fee_year, p.fee_month)
+            if k not in paid_map:
+                paid_map[k] = {"total": 0, "payments": []}
+            paid_map[k]["total"] += amt
+            paid_map[k]["payments"].append(p)
+
+    monthly_fee = lifecycle_data["monthly_fee"]
+    join_date = student.join_date or (
+        student.created_at.date()
+        if getattr(student, "created_at", None)
+        else date(target_year, target_month, 1)
+    )
+
+    monthly_ledger = []
+    curr_y = join_date.year
+    curr_m = join_date.month
+
+    while (curr_y < target_year) or (curr_y == target_year and curr_m <= target_month):
+        m_info = paid_map.get((curr_y, curr_m), {"total": 0, "payments": []})
+        m_paid = m_info["total"]
+        m_payments = m_info["payments"]
+        m_due_date = date(curr_y, curr_m, 1)
+
+        if (monthly_fee > 0 and m_paid >= monthly_fee) or (monthly_fee == 0 and (m_paid > 0 or len(m_payments) > 0)):
+            m_status = "PAID"
+            m_pending = 0
+        else:
+            m_pending = max(0, monthly_fee - m_paid)
+            if today > m_due_date:
+                m_status = "OVERDUE"
+            elif today == m_due_date:
+                m_status = "DUE TODAY"
+            else:
+                m_status = "UNPAID"
+
+        latest_p = m_payments[0] if m_payments else None
+        m_paid_date = format_date(latest_p.payment_date) if (latest_p and latest_p.payment_date) else "-"
+        m_method = str(latest_p.payment_method) if (latest_p and latest_p.payment_method) else "-"
+
+        monthly_ledger.append(
+            {
+                "Month & Year": f"{month_name(curr_m)} {curr_y}",
+                "Fee Amount": monthly_fee,
+                "Paid Amount": m_paid,
+                "Pending Amount": m_pending,
+                "Status": m_status,
+                "Paid Date": m_paid_date,
+                "Payment Method": m_method,
+            }
+        )
+
+        if curr_m == 12:
+            curr_y += 1
+            curr_m = 1
+        else:
+            curr_m += 1
+
+    # Payment transaction rows
+    payment_history_rows = []
+    for p_item in all_payments:
+        payment_history_rows.append(
+            {
+                "Payment ID": p_item.id,
+                "Payment Date": format_date(p_item.payment_date),
+                "Fee Month": month_name(p_item.fee_month),
+                "Fee Year": p_item.fee_year,
+                "Amount": int(p_item.net_payable or 0),
+                "Payment Method": str(p_item.payment_method),
+                "Status": "PAID",
+            }
+        )
+
+    clean_name = student.full_name.replace(" ", "_").lower()
+
+    if format == "pdf":
+        student_info = {
+            "id": student.id,
+            "name": student.full_name,
+            "gender": student.gender or "-",
+            "dob": format_date(student.dob),
+            "age": calculate_age(student.dob),
+            "blood_group": student.blood_group or "-",
+            "join_date": format_date(student.join_date),
+            "parent_name": student.parent_name or "-",
+            "phone": student.phone_number or "-",
+            "emergency_contact": student.emergency_contact or "-",
+            "status": "ACTIVE" if student.is_active else "INACTIVE",
+            "batch_name": batch.batch_name if batch else "-",
+            "location": batch.location if (batch and batch.location) else "-",
+            "monthly_fee": monthly_fee,
+            "conducted": conducted,
+            "attended": attended,
+            "absent": absent,
+            "attendance_percentage": attendance_percentage,
+            "total_due_months": lifecycle_data["total_due_months"],
+            "months_paid_count": lifecycle_data["months_paid_count"],
+            "unpaid_months_count": lifecycle_data["unpaid_months_count"],
+            "total_pending_amount": lifecycle_data["total_pending_amount"],
+            "lifetime_total_paid": lifecycle_data["lifetime_total_paid"],
+            "fee_status": lifecycle_data["fee_status"],
+            "target_paid_amount": lifecycle_data["target_paid_amount"],
+            "target_pending_amount": lifecycle_data["target_pending_amount"],
+            "target_paid_date": lifecycle_data["target_paid_date"],
+            "target_payment_method": lifecycle_data["target_payment_method"],
+            "last_paid_amount": lifecycle_data["last_paid_amount"],
+            "last_paid_month": lifecycle_data["last_paid_month"],
+            "last_paid_date": lifecycle_data["last_paid_date"],
+            "month_label": target_month_label,
+        }
+
+        output = create_single_student_pdf(
+            student_data=student_info,
+            monthly_ledger=monthly_ledger,
+            payment_history=payment_history_rows,
+        )
+
+        return StreamingResponse(
+            output,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition":
+                    f'attachment; filename="student-{student.id}-{clean_name}-report.pdf"'
+            },
+        )
+
+    summary_profile_row = [
+        {
+            "Student ID": student.id,
+            "Student Name": student.full_name,
+            "Gender": student.gender or "-",
+            "Age": calculate_age(student.dob),
+            "DOB": format_date(student.dob),
+            "Blood Group": student.blood_group or "-",
+            "Join Date": format_date(student.join_date),
+            "Parent Name": student.parent_name or "-",
+            "Phone": student.phone_number or "-",
+            "Emergency Contact": student.emergency_contact or "-",
+            "Status": "ACTIVE" if student.is_active else "INACTIVE",
+            "Batch Name": batch.batch_name if batch else "-",
+            "Location": batch.location if (batch and batch.location) else "-",
+            "Classes Conducted": conducted,
+            "Classes Attended": attended,
+            "Classes Absent": absent,
+            "Attendance %": attendance_percentage,
+            "Monthly Fee": monthly_fee,
+            "Target Fee Month": target_month_label,
+            "Fee Status": lifecycle_data["fee_status"],
+            "Total Months (Since Join)": lifecycle_data["total_due_months"],
+            "Months Paid": lifecycle_data["months_paid_count"],
+            "Months Overdue": lifecycle_data["unpaid_months_count"],
+            "Total Pending Balance": lifecycle_data["total_pending_amount"],
+            "Lifetime Total Paid": lifecycle_data["lifetime_total_paid"],
+            "Last Paid Amount": lifecycle_data["last_paid_amount"],
+            "Last Paid Month": lifecycle_data["last_paid_month"],
+            "Last Paid Date": lifecycle_data["last_paid_date"],
+        }
+    ]
+
+    sheets = {
+        "Profile & Summary": summary_profile_row,
+        "Monthly Fee Ledger": monthly_ledger,
+        "Payment Transactions": payment_history_rows,
+        "Attendance Logs": attendance_logs,
+    }
+
+    return export_response(
+        sheets,
+        format,
+        f"student-{student.id}-{clean_name}-report",
+        f"Student Report - {student.full_name}",
     )
