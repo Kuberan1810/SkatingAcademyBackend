@@ -1,6 +1,5 @@
-from __future__ import annotations
-
 import csv
+import io
 import os
 import re
 import shutil
@@ -9,12 +8,16 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+import cv2
+import numpy as np
 from docx import Document
 from openpyxl import load_workbook
 
 from PIL import (
     Image,
+    ImageEnhance,
     ImageOps,
+    UnidentifiedImageError,
 )
 
 import pytesseract
@@ -33,14 +36,26 @@ from app.models.student import Student
 # TESSERACT OCR CONFIGURATION
 # =========================================================
 
-def configure_tesseract() -> None:
-    # Environment variable override
+def get_tesseract_cmd() -> str:
+    """
+    Dynamically resolves Tesseract OCR executable path:
+    1. TESSERACT_CMD environment variable (Docker / Render / Custom path)
+    2. shutil.which("tesseract") from system PATH
+    3. Linux / Render standard locations (/usr/bin/tesseract, /usr/local/bin/tesseract)
+    4. Windows standard installation paths (only if running on Windows)
+    """
+    # 1. Environment variable override (e.g. Render config or .env)
     env_path = os.getenv("TESSERACT_CMD")
-    if env_path and os.path.isfile(env_path):
-        pytesseract.pytesseract.tesseract_cmd = env_path
-        return
+    if env_path:
+        if os.path.isfile(env_path) or shutil.which(env_path):
+            return env_path
 
-    # Standard Linux / Docker paths
+    # 2. System PATH search
+    tesseract_in_path = shutil.which("tesseract")
+    if tesseract_in_path:
+        return tesseract_in_path
+
+    # 3. Standard Linux / Docker / Render paths
     linux_paths = [
         "/usr/bin/tesseract",
         "/usr/local/bin/tesseract",
@@ -48,24 +63,31 @@ def configure_tesseract() -> None:
     ]
     for path in linux_paths:
         if os.path.isfile(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            return
+            return path
 
-    # Windows paths
-    windows_paths = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for path in windows_paths:
-        if os.path.isfile(path):
-            pytesseract.pytesseract.tesseract_cmd = path
-            return
+    # 4. Standard Windows paths (only checked if OS is Windows)
+    if os.name == "nt":
+        windows_paths = [
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+        ]
+        for path in windows_paths:
+            if os.path.isfile(path):
+                return path
 
-    # System PATH search
-    tesseract_path = shutil.which("tesseract")
-    if tesseract_path:
-        pytesseract.pytesseract.tesseract_cmd = tesseract_path
-        return
+    # Fallback default
+    return "/usr/bin/tesseract" if os.name != "nt" else "tesseract"
+
+
+def configure_tesseract() -> str:
+    """
+    Applies resolved Tesseract path to pytesseract.
+    Returns the resolved path.
+    """
+    cmd = get_tesseract_cmd()
+    pytesseract.pytesseract.tesseract_cmd = cmd
+    return cmd
 
 
 configure_tesseract()
@@ -905,118 +927,134 @@ def parse_txt(
 
 
 # =========================================================
-# IMAGE OCR
+# IMAGE OCR & PREPROCESSING
 # =========================================================
 
-def preprocess_image(
-    image: Image.Image,
-):
-
-    image = image.convert(
-        "L"
-    )
-
-    image = ImageOps.autocontrast(
-        image
-    )
-
-    width, height = (
-        image.size
-    )
-
-    if width < 1600:
-
-        scale = (
-            1600 / width
-        )
-
-        image = image.resize(
-            (
-                int(
-                    width * scale
-                ),
-                int(
-                    height * scale
-                ),
-            )
-        )
-
-    return image
-
-def parse_image(
-    file_path: str,
-):
+def preprocess_image_cv(
+    image_input: str | bytes | Image.Image,
+) -> Image.Image:
+    """
+    Enhanced image preprocessing using OpenCV with Pillow fallback:
+    - Normalizes resolution (rescales images with width < 1600px)
+    - Converts to grayscale
+    - Removes noise via Gaussian blur
+    - Enhances text contrast via Otsu binarization and adaptive thresholding
+    """
+    img_bgr = None
 
     try:
+        if isinstance(image_input, Image.Image):
+            pil_img = image_input.convert("RGB")
+            img_np = np.array(pil_img)
+            img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
+        elif isinstance(image_input, (bytes, bytearray)):
+            np_arr = np.frombuffer(image_input, np.uint8)
+            img_bgr = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        elif isinstance(image_input, str):
+            if os.path.isfile(image_input):
+                img_bgr = cv2.imread(image_input)
+    except Exception:
+        img_bgr = None
 
-        # Check Tesseract before OCR
-        if not shutil.which(
-            "tesseract"
-        ) and not os.path.isfile(
-            pytesseract.pytesseract.tesseract_cmd
-            or ""
-        ):
+    if img_bgr is not None and img_bgr.size > 0:
+        height, width = img_bgr.shape[:2]
 
-            raise ValueError(
-                "Tesseract OCR is not installed "
-                "or not available in PATH."
-            )
-
-        image = Image.open(
-            file_path
-        )
-
-        image = image.convert(
-            "RGB"
-        )
-
-        image = ImageOps.autocontrast(
-            image.convert("L")
-        )
-
-        width, height = image.size
-
+        # Rescale if image is too small
         if width < 1600:
+            scale = 1600.0 / width
+            new_w = int(width * scale)
+            new_h = int(height * scale)
+            img_bgr = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-            scale = 1600 / width
+        # Grayscale
+        gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-            image = image.resize(
-                (
-                    int(width * scale),
-                    int(height * scale),
-                )
-            )
+        # Mild denoise blur
+        blurred = cv2.GaussianBlur(gray, (3, 3), 0)
 
-        text = pytesseract.image_to_string(
-            image,
-            config="--psm 6",
-        )
+        # Otsu binarization
+        _, thresh = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    except pytesseract.TesseractNotFoundError as exc:
+        return Image.fromarray(thresh)
 
-        raise ValueError(
-            "Tesseract OCR is not installed "
-            "or not configured correctly."
-        ) from exc
+    # Fallback to pure Pillow preprocessing
+    if isinstance(image_input, str):
+        pil_img = Image.open(image_input)
+    elif isinstance(image_input, (bytes, bytearray)):
+        pil_img = Image.open(io.BytesIO(image_input))
+    elif isinstance(image_input, Image.Image):
+        pil_img = image_input
+    else:
+        raise ValueError("Invalid image input for OCR")
 
+    pil_img = pil_img.convert("L")
+    pil_img = ImageOps.autocontrast(pil_img)
+
+    width, height = pil_img.size
+    if width < 1600:
+        scale = 1600.0 / width
+        pil_img = pil_img.resize((int(width * scale), int(height * scale)), Image.Resampling.LANCZOS)
+
+    return pil_img
+
+
+def preprocess_image(image: Image.Image) -> Image.Image:
+    return preprocess_image_cv(image)
+
+
+def parse_image(
+    file_path_or_bytes: str | bytes | Image.Image,
+) -> list[dict[str, Any]]:
+    """
+    Robust OCR extraction for image files (.jpg, .jpeg, .png, .webp).
+    Supports multi-pass PSM strategies and dynamic Tesseract configuration.
+    """
+    configure_tesseract()
+
+    try:
+        preprocessed = preprocess_image_cv(file_path_or_bytes)
+    except UnidentifiedImageError as exc:
+        raise ValueError("Invalid or unreadable image file format.") from exc
     except Exception as exc:
+        raise ValueError(f"Failed to load image for OCR: {exc}") from exc
 
-        raise ValueError(
-            f"Image OCR failed: {exc}"
-        ) from exc
+    text = ""
+    last_error = None
+
+    # Multi-strategy OCR: first tabular (--psm 6), then standard page (--psm 4), then automatic (--psm 3)
+    ocr_configs = [
+        "--oem 3 --psm 6",
+        "--oem 3 --psm 4",
+        "--oem 3 --psm 3",
+    ]
+
+    for cfg in ocr_configs:
+        try:
+            extracted = pytesseract.image_to_string(preprocessed, config=cfg)
+            if extracted and len(extracted.strip()) > 10:
+                text = extracted
+                break
+        except pytesseract.TesseractNotFoundError as exc:
+            raise ValueError(
+                "Tesseract OCR is not installed or executable path is incorrect. "
+                f"Configured path: '{pytesseract.pytesseract.tesseract_cmd}'"
+            ) from exc
+        except Exception as exc:
+            last_error = exc
+            continue
 
     if not text.strip():
+        if last_error:
+            raise ValueError(f"Image OCR failed: {last_error}")
+        raise ValueError("No readable student data found in image. Please ensure the image is clear and legible.")
 
-        raise ValueError(
-            "No readable student data found in image."
-        )
+    return parse_text_records(text)
 
-    return parse_text_records(
-        text
-    )
+
 # =========================================================
 # PDF
 # =========================================================
+
 def parse_pdf(
     file_path: str,
 ):
@@ -1026,9 +1064,10 @@ def parse_pdf(
     Flow:
     1. Try PyMuPDF text extraction.
     2. If text exists -> parse text.
-    3. If PDF has no selectable text -> OCR pages.
+    3. If PDF has no selectable text -> OCR pages with enhanced preprocessing.
     4. If both fail -> return a clear error.
     """
+    configure_tesseract()
 
     # =====================================================
     # 1. PYMuPDF
@@ -1094,7 +1133,7 @@ def parse_pdf(
                 page_number
             )
 
-            # Render PDF page to image
+            # Render PDF page to image at 2x resolution
             pix = page.get_pixmap(
                 matrix=fitz.Matrix(
                     2,
@@ -1113,7 +1152,7 @@ def parse_pdf(
             )
 
             # Preprocess
-            image = preprocess_image(
+            image = preprocess_image_cv(
                 image
             )
 
@@ -1123,7 +1162,7 @@ def parse_pdf(
                     pytesseract
                     .image_to_string(
                         image,
-                        config="--psm 6",
+                        config="--oem 3 --psm 6",
                     )
                 )
 

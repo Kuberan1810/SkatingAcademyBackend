@@ -38,6 +38,7 @@ from app.api.v1.report_exports import (
 from app.api.v1.student_import import (
     router as student_import_router,
 )
+from app.api.v1.ocr import router as ocr_router
 from app.api.v1.pending_fees import router as pending_fees_router
 from app.api.v1.schedule import router as schedule_router
 
@@ -169,6 +170,11 @@ app.include_router(
 
 app.include_router(
     student_import_router,
+    prefix="/api/v1",
+)
+
+app.include_router(
+    ocr_router,
     prefix="/api/v1",
 )
 

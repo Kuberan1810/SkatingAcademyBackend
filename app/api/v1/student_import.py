@@ -198,6 +198,9 @@ async def preview_student_import(
                 content
             )
 
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+
             temp_path = temp_file.name
 
         raw_records = parse_file(
@@ -243,6 +246,15 @@ async def preview_student_import(
     except HTTPException:
         raise
 
+    except pytesseract.TesseractNotFoundError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Tesseract OCR engine is not installed or accessible on the server. "
+                f"Details: {exc}"
+            ),
+        ) from exc
+
     except Exception as exc:
 
         raise HTTPException(
@@ -258,9 +270,12 @@ async def preview_student_import(
                 temp_path
             )
         ):
-            os.remove(
-                temp_path
-            )
+            try:
+                os.remove(
+                    temp_path
+                )
+            except Exception:
+                pass
 
 # =========================================================
 # TEXT PREVIEW
