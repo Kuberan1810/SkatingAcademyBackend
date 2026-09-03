@@ -1,11 +1,7 @@
-import io
-import os
-import shutil
+import numpy as np
+import cv2
 from fastapi import APIRouter
-from PIL import Image, ImageDraw
-import pytesseract
-
-from app.services.student_import import configure_tesseract, get_tesseract_cmd
+from app.services.student_import import get_ocr_engine, extract_text_from_image
 
 router = APIRouter(
     prefix="/ocr",
@@ -19,51 +15,45 @@ router = APIRouter(
 )
 def ocr_health():
     """
-    Diagnostic endpoint to verify Tesseract OCR installation and operation on Linux/Render/Docker:
-    - Verifies executable presence
-    - Reads Tesseract version
-    - Executes an end-to-end OCR test on a generated image
+    Diagnostic endpoint to verify lightweight PaddleOCR (RapidOCR ONNX) installation and operation:
+    - Pure pip package
+    - No Docker / apt-get required
+    - Executes an end-to-end OCR test on an in-memory generated image
     """
-    cmd = configure_tesseract()
-    tesseract_exists = os.path.isfile(cmd) or bool(shutil.which(cmd))
+    engine = get_ocr_engine()
+    if engine is None:
+        return {
+            "status": "error",
+            "ocr": "unavailable",
+            "engine": "PaddleOCR (RapidOCR ONNX)",
+            "pip_only": True,
+            "no_docker_required": True,
+            "test_passed": False,
+            "message": "RapidOCR engine is not installed. Run `pip install rapidocr-onnxruntime onnxruntime`.",
+        }
 
-    version_str = None
+    # Generate quick in-memory test image
+    test_img = np.ones((60, 240, 3), dtype=np.uint8) * 255
+    cv2.putText(test_img, "PADDLE OCR OK", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+
+    extracted = ""
     test_passed = False
     test_message = ""
-    extracted_sample = None
 
     try:
-        version = pytesseract.get_tesseract_version()
-        version_str = str(version)
-
-        # Quick end-to-end in-memory OCR test
-        test_img = Image.new("RGB", (180, 50), color=(255, 255, 255))
-        draw = ImageDraw.Draw(test_img)
-        draw.text((10, 15), "TEST OK", fill=(0, 0, 0))
-
-        extracted = pytesseract.image_to_string(test_img, config="--psm 7").strip()
-        extracted_sample = extracted
-        test_passed = True
-        test_message = f"OCR engine responded successfully. Sample text extracted: '{extracted}'"
-
-    except pytesseract.TesseractNotFoundError as exc:
-        test_message = (
-            f"Tesseract executable not found or not accessible at '{cmd}'. "
-            f"Details: {exc}"
-        )
+        extracted = extract_text_from_image(test_img).strip()
+        test_passed = bool(extracted and len(extracted) > 0)
+        test_message = f"PaddleOCR ONNX engine responded successfully. Sample extracted: '{extracted}'"
     except Exception as exc:
         test_message = f"OCR engine test execution error: {exc}"
 
-    is_healthy = bool(tesseract_exists and version_str and test_passed)
-
     return {
-        "status": "ok" if is_healthy else "error",
-        "ocr": "available" if is_healthy else "unavailable",
-        "tesseract_installed": tesseract_exists,
-        "tesseract_version": version_str,
-        "executable": cmd,
-        "tessdata_prefix": os.getenv("TESSDATA_PREFIX", None),
+        "status": "ok" if test_passed else "error",
+        "ocr": "available" if test_passed else "unavailable",
+        "engine": "PaddleOCR (RapidOCR ONNX)",
+        "pip_only": True,
+        "no_docker_required": True,
         "test_passed": test_passed,
-        "sample_extracted": extracted_sample,
+        "sample_extracted": extracted,
         "message": test_message,
     }

@@ -1,12 +1,10 @@
 FROM python:3.12-slim
 
 # =========================================================
-# SYSTEM / OCR DEPENDENCIES
+# SYSTEM DEPENDENCIES (OpenCV & PostgreSQL)
 # =========================================================
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr \
-    tesseract-ocr-eng \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
@@ -18,8 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # =========================================================
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    TESSERACT_CMD=/usr/bin/tesseract
+    PYTHONDONTWRITEBYTECODE=1
 
 # =========================================================
 # APPLICATION WORKDIR & DEPENDENCIES
@@ -33,12 +30,6 @@ RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-# =========================================================
-# VERIFY TESSERACT INSTALLATION DURING BUILD
-# =========================================================
-
-RUN which tesseract && tesseract --version
 
 # =========================================================
 # SERVER ENTRYPOINT
