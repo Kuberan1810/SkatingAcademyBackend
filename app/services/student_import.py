@@ -329,7 +329,7 @@ def normalize_record(
             ] = value
 
     # =====================================================
-    # REQUIRED FIELDS
+    # REQUIRED FIELDS (Only Name, DOB, Phone mandatory)
     # =====================================================
 
     full_name = clean_text(
@@ -344,24 +344,32 @@ def normalize_record(
         )
     )
 
+    phone_number = clean_phone(
+        normalized.get(
+            "phone_number"
+        )
+    )
+
+    # =====================================================
+    # OPTIONAL FIELDS
+    # =====================================================
+
     gender = (
         clean_text(
             normalized.get(
                 "gender"
             )
         ).title()
+        or None
     )
 
-    parent_name = clean_text(
-        normalized.get(
-            "parent_name"
+    parent_name = (
+        clean_text(
+            normalized.get(
+                "parent_name"
+            )
         )
-    )
-
-    phone_number = clean_phone(
-        normalized.get(
-            "phone_number"
-        )
+        or None
     )
 
     monthly_fee = parse_int_value(
@@ -369,10 +377,6 @@ def normalize_record(
             "monthly_fee"
         )
     )
-
-    # =====================================================
-    # OPTIONAL FIELDS
-    # =====================================================
 
     blood_group = (
         clean_text(
@@ -408,7 +412,7 @@ def normalize_record(
     )
 
     # =====================================================
-    # REQUIRED VALIDATION
+    # REQUIRED VALIDATION (Only Name, DOB, Phone required)
     # =====================================================
 
     if not full_name:
@@ -421,28 +425,6 @@ def normalize_record(
 
         errors.append(
             "Valid date of birth is required"
-        )
-
-    if not gender:
-
-        errors.append(
-            "Gender is required"
-        )
-
-    elif gender not in {
-        "Male",
-        "Female",
-        "Other",
-    }:
-
-        errors.append(
-            "Gender must be Male, Female, or Other"
-        )
-
-    if not parent_name:
-
-        errors.append(
-            "Parent name is required"
         )
 
     if not phone_number:
@@ -463,13 +445,24 @@ def normalize_record(
             "Phone number must contain at least 10 digits"
         )
 
-    if (
-        monthly_fee is None
-        or monthly_fee <= 0
-    ):
+    # =====================================================
+    # OPTIONAL VALIDATION
+    # =====================================================
+
+    if gender and gender not in {
+        "Male",
+        "Female",
+        "Other",
+    }:
 
         errors.append(
-            "Monthly fee must be greater than 0"
+            "Gender must be Male, Female, or Other"
+        )
+
+    if monthly_fee is not None and monthly_fee < 0:
+
+        errors.append(
+            "Monthly fee cannot be negative"
         )
 
     # =====================================================

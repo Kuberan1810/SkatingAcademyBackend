@@ -479,12 +479,33 @@ def confirm_student_import(
                 continue
 
             # =============================================
-            # JOIN DATE
+            # FALLBACKS FOR OPTIONAL FIELDS
             # =============================================
 
             final_join_date = (
                 record.join_date
                 or date.today()
+            )
+
+            final_parent_name = (
+                (record.parent_name or "").strip()
+                or "Parent"
+            )
+
+            final_monthly_fee = (
+                record.monthly_fee
+                if (record.monthly_fee is not None and record.monthly_fee > 0)
+                else (batch.monthly_fee or 0)
+            )
+
+            final_gender = (
+                (record.gender or "").strip()
+                or None
+            )
+
+            final_emergency_contact = (
+                (record.emergency_contact or "").strip()
+                or record.phone_number
             )
 
             # =============================================
@@ -500,7 +521,7 @@ def confirm_student_import(
                     record.dob,
 
                 gender=
-                    record.gender,
+                    final_gender,
 
                 blood_group=
                     record.blood_group,
@@ -513,16 +534,16 @@ def confirm_student_import(
                     final_join_date,
 
                 parent_name=
-                    record.parent_name,
+                    final_parent_name,
 
                 phone_number=
                     record.phone_number,
 
                 emergency_contact=
-                    record.emergency_contact,
+                    final_emergency_contact,
 
                 monthly_fee=
-                    record.monthly_fee,
+                    final_monthly_fee,
 
                 avatar_uri=
                     record.avatar_uri,

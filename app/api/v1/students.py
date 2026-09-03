@@ -103,18 +103,22 @@ def create_student(
         else (batch.monthly_fee or 0)
     )
 
+    resolved_parent_name = (data.parent_name or "").strip() or "Parent"
+    resolved_join_date = data.join_date or date.today()
+    resolved_emergency_contact = (data.emergency_contact or "").strip() or data.phone_number
+    resolved_gender = (data.gender or "").strip() or None
 
     # Create student
     student = Student(
         full_name=data.full_name,
         dob=data.dob,
-        gender=data.gender,
+        gender=resolved_gender,
         blood_group=data.blood_group,
         batch_id=data.batch_id,
-        join_date=data.join_date,
-        parent_name=data.parent_name,
+        join_date=resolved_join_date,
+        parent_name=resolved_parent_name,
         phone_number=data.phone_number,
-        emergency_contact=data.emergency_contact,
+        emergency_contact=resolved_emergency_contact,
         monthly_fee=resolved_monthly_fee,
         avatar_uri=data.avatar_uri,
     )

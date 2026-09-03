@@ -820,7 +820,7 @@ def create_student_pdf(
 
     summary_table = Table(
         summary_data,
-        colWidths=[25 * mm, 65 * mm, 25 * mm, 65 * mm, 32 * mm, 65 * mm],
+        colWidths=[25 * mm, 65 * mm, 25 * mm, 65 * mm, 32 * mm, 69 * mm],
     )
     summary_table.setStyle(
         TableStyle(
@@ -851,30 +851,30 @@ def create_student_pdf(
         output.seek(0)
         return output
 
-    # 3. Table Column Widths (Total: 264.5 mm, landscape A4)
+    # 3. Table Column Widths (Total: 281 mm, landscape A4)
     col_widths = [
-        6.5 * mm,   # ID
-        23 * mm,    # Student Name
-        9 * mm,     # Gender
-        6 * mm,     # Age
-        13.5 * mm,  # DOB
-        8.5 * mm,   # Blood
-        13.5 * mm,  # Join Date
-        19 * mm,    # Parent Name
-        16.5 * mm,  # Phone
+        7 * mm,     # ID
+        25 * mm,    # Student Name
+        10 * mm,    # Gender
+        7 * mm,     # Age
+        14 * mm,    # DOB
+        9 * mm,     # Blood
+        14 * mm,    # Join Date
+        20 * mm,    # Parent Name
+        17 * mm,    # Phone
         11 * mm,    # Status
-        13.5 * mm,  # Classes (Att/Cond)
-        12 * mm,    # Monthly Fee
-        12.5 * mm,  # Fee Status
-        11 * mm,    # Paid Amt
-        11 * mm,    # Pending
-        13.5 * mm,  # Paid Date
-        10 * mm,    # Method
-        13.5 * mm,  # Months (Paid/Due)
+        14 * mm,    # Classes (Att/Cond)
+        13 * mm,    # Monthly Fee
+        13 * mm,    # Fee Status
+        12 * mm,    # Paid Amt
+        12 * mm,    # Pending
+        14 * mm,    # Paid Date
+        11 * mm,    # Method
+        14 * mm,    # Months (Paid/Due)
         11 * mm,    # Months Overdue
-        13.5 * mm,  # Total Pending
-        12.5 * mm,  # Last Paid Amt
-        14 * mm,    # Last Paid Month
+        14 * mm,    # Total Pending
+        14 * mm,    # Last Paid Amt
+        15 * mm,    # Last Paid Month
     ]
 
     headers = [
@@ -1624,7 +1624,7 @@ def create_batch_pdf(
 
     summary_table = Table(
         summary_data,
-        colWidths=[25 * mm, 65 * mm, 30 * mm, 60 * mm, 32 * mm, 65 * mm],
+        colWidths=[25 * mm, 65 * mm, 30 * mm, 60 * mm, 32 * mm, 69 * mm],
     )
     summary_table.setStyle(
         TableStyle(
@@ -1650,22 +1650,22 @@ def create_batch_pdf(
         output.seek(0)
         return output
 
-    # 3. Table Column Widths (Total: 277 mm)
+    # 3. Table Column Widths (Total: 281 mm)
     col_widths = [
-        9 * mm,   # ID
-        28 * mm,  # Batch Name
-        24 * mm,  # Location
-        16 * mm,  # Level
-        17 * mm,  # Class Type
-        36 * mm,  # Training Days
-        18 * mm,  # Monthly Fee
+        10 * mm,  # ID
+        30 * mm,  # Batch Name
+        25 * mm,  # Location
+        17 * mm,  # Level
+        18 * mm,  # Class Type
+        37 * mm,  # Training Days
+        19 * mm,  # Monthly Fee
         15 * mm,  # Students
         17 * mm,  # Conducted
         15 * mm,  # Present
         15 * mm,  # Absent
         18 * mm,  # Attendance %
-        24 * mm,  # This Month Rev
-        25 * mm,  # Pending Fees
+        22 * mm,  # This Month Rev
+        23 * mm,  # Pending Fees
     ]
 
     headers = [
@@ -1760,6 +1760,471 @@ def create_batch_pdf(
     )
 
     story.append(batch_table)
+    document.build(story)
+    output.seek(0)
+    return output
+
+
+# =========================================================
+# FEE OVERVIEW PDF EXPORT
+# =========================================================
+
+
+def create_fee_overview_pdf(
+    month_label: str,
+    kpi_data: dict,
+    payment_methods_data: list[dict],
+    batches_data: list[dict],
+    students_data: list[dict],
+    batch_filter_name: str | None = None,
+    fee_status_filter: str | None = None,
+    payment_method_filter: str | None = None,
+) -> BytesIO:
+
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Table,
+        TableStyle,
+        Paragraph,
+        Spacer,
+        HRFlowable,
+    )
+
+    output = BytesIO()
+
+    document = SimpleDocTemplate(
+        output,
+        pagesize=landscape(A4),
+        leftMargin=8 * mm,
+        rightMargin=8 * mm,
+        topMargin=8 * mm,
+        bottomMargin=8 * mm,
+    )
+
+    styles = getSampleStyleSheet()
+
+    # Typography Styles
+    title_style = ParagraphStyle(
+        "FeeOverviewTitle",
+        parent=styles["Heading1"],
+        fontName="Helvetica-Bold",
+        fontSize=14,
+        leading=17,
+        textColor=colors.HexColor("#1E3A8A"),
+        spaceAfter=0,
+    )
+
+    subtitle_style = ParagraphStyle(
+        "FeeOverviewSubtitle",
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10.5,
+        textColor=colors.HexColor("#64748B"),
+    )
+
+    section_header_style = ParagraphStyle(
+        "FeeSectionHeader",
+        fontName="Helvetica-Bold",
+        fontSize=9,
+        leading=11.5,
+        textColor=colors.HexColor("#1E293B"),
+    )
+
+    meta_label_style = ParagraphStyle(
+        "FeeMetaLabel",
+        fontName="Helvetica-Bold",
+        fontSize=7.2,
+        leading=9.2,
+        textColor=colors.HexColor("#374151"),
+    )
+
+    meta_value_style = ParagraphStyle(
+        "FeeMetaValue",
+        fontName="Helvetica",
+        fontSize=7.2,
+        leading=9.2,
+        textColor=colors.HexColor("#111827"),
+    )
+
+    meta_value_highlight = ParagraphStyle(
+        "FeeMetaValueHighlight",
+        fontName="Helvetica-Bold",
+        fontSize=7.2,
+        leading=9.2,
+        textColor=colors.HexColor("#1D4ED8"),
+    )
+
+    kpi_section_header = ParagraphStyle(
+        "FeeKPISectionHeader",
+        fontName="Helvetica-Bold",
+        fontSize=7.8,
+        leading=9.8,
+        textColor=colors.HexColor("#1E3A8A"),
+        alignment=0,
+    )
+
+    header_cell_style = ParagraphStyle(
+        "FeeTHeader",
+        fontName="Helvetica-Bold",
+        fontSize=6.2,
+        leading=7.8,
+        textColor=colors.white,
+        alignment=1,
+    )
+
+    cell_style = ParagraphStyle(
+        "FeeTCell",
+        fontName="Helvetica",
+        fontSize=5.5,
+        leading=7.0,
+        textColor=colors.HexColor("#1E293B"),
+        alignment=1,
+    )
+
+    cell_style_left = ParagraphStyle(
+        "FeeTCellLeft",
+        fontName="Helvetica",
+        fontSize=5.5,
+        leading=7.0,
+        textColor=colors.HexColor("#1E293B"),
+        alignment=0,
+    )
+
+    story = []
+
+    # 1. Header Title Banner
+    filters_applied = []
+    if batch_filter_name:
+        filters_applied.append(f"Batch: {batch_filter_name}")
+    if fee_status_filter:
+        filters_applied.append(f"Fee Status: {fee_status_filter.upper()}")
+    if payment_method_filter:
+        filters_applied.append(f"Method: {payment_method_filter.upper()}")
+    filter_str = ", ".join(filters_applied) if filters_applied else "All Data"
+
+    header_table = Table(
+        [
+            [
+                Paragraph("<b>SKATING ACADEMY - FEE OVERVIEW & FINANCIAL REPORT</b>", title_style),
+                Paragraph(f"<b>Generated:</b> {date.today().strftime('%d %b %Y')}", ParagraphStyle("GenD", parent=subtitle_style, alignment=2)),
+            ],
+            [
+                Paragraph(f"<b>Target Month:</b> {month_label} &nbsp;|&nbsp; <b>Filters:</b> {filter_str}", subtitle_style),
+                Paragraph("Executive Financial Statement", ParagraphStyle("SubR", parent=subtitle_style, alignment=2)),
+            ],
+        ],
+        colWidths=[180 * mm, 101 * mm],
+    )
+    header_table.setStyle(
+        TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ])
+    )
+    story.append(header_table)
+    story.append(Spacer(1, 1.5 * mm))
+    story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#CBD5E1"), spaceAfter=2.5 * mm))
+
+    # 2. Executive Financial Summary & KPI Card (Full Width: 281 mm)
+    exp_rev = kpi_data.get("total_expected_revenue", 0)
+    coll_rev = kpi_data.get("total_collected_revenue", 0)
+    pend_dues = kpi_data.get("total_pending_dues", 0)
+    rec_rate = kpi_data.get("collection_rate", 0)
+
+    tot_stu = kpi_data.get("total_students_count", 0)
+    paid_stu = kpi_data.get("paid_students_count", 0)
+    overdue_stu = kpi_data.get("overdue_students_count", 0)
+    due_today_stu = kpi_data.get("due_today_students_count", 0)
+    unpaid_stu = kpi_data.get("unpaid_students_count", 0)
+
+    summary_card_data = [
+        # Row 0: Metadata Row (Image 1 Style)
+        [
+            Paragraph("Batch Filter:", meta_label_style),
+            Paragraph(batch_filter_name or "ALL BATCHES", meta_value_highlight),
+            Paragraph("Total Batches:", meta_label_style),
+            Paragraph(str(len(batches_data)), meta_value_style),
+            Paragraph("Target Month:", meta_label_style),
+            Paragraph(month_label, meta_value_highlight),
+        ],
+        # Row 1: KPI Section Headers
+        [
+            Paragraph("<b>REVENUE & COLLECTION HEALTH</b>", kpi_section_header),
+            "",
+            "",
+            Paragraph("<b>STUDENT FEE STATUS BREAKDOWN</b>", kpi_section_header),
+            "",
+            "",
+        ],
+        # Row 2: Metrics Line 1
+        [
+            Paragraph("• Expected Revenue:", meta_label_style),
+            Paragraph(f"<b>Rs. {exp_rev:,}</b>", meta_value_style),
+            "",
+            Paragraph("• Total Active Students:", meta_label_style),
+            Paragraph(f"<b>{tot_stu}</b>", meta_value_style),
+            "",
+        ],
+        # Row 3: Metrics Line 2
+        [
+            Paragraph("• Collected Revenue:", meta_label_style),
+            Paragraph(f"<font color='#047857'><b>Rs. {coll_rev:,}</b></font>", meta_value_style),
+            "",
+            Paragraph("• Paid Students:", meta_label_style),
+            Paragraph(f"<font color='#047857'><b>{paid_stu}</b></font> ({((paid_stu/tot_stu)*100 if tot_stu else 0):.1f}%)", meta_value_style),
+            "",
+        ],
+        # Row 4: Metrics Line 3
+        [
+            Paragraph("• Pending Dues:", meta_label_style),
+            Paragraph(f"<font color='#B91C1C'><b>Rs. {pend_dues:,}</b></font>", meta_value_style),
+            "",
+            Paragraph("• Overdue Students:", meta_label_style),
+            Paragraph(f"<font color='#B91C1C'><b>{overdue_stu}</b></font>", meta_value_style),
+            "",
+        ],
+        # Row 5: Metrics Line 4
+        [
+            Paragraph("• Collection Recovery Rate:", meta_label_style),
+            Paragraph(f"<b>{rec_rate:.1f}%</b>", meta_value_highlight),
+            "",
+            Paragraph("• Due Today / Unpaid:", meta_label_style),
+            Paragraph(f"<font color='#D97706'><b>{due_today_stu + unpaid_stu}</b></font>", meta_value_style),
+            "",
+        ],
+    ]
+
+    summary_table = Table(
+        summary_card_data,
+        colWidths=[42 * mm, 52 * mm, 46.5 * mm, 42 * mm, 52 * mm, 46.5 * mm],
+    )
+    summary_table.setStyle(
+        TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#CBD5E1")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#E2E8F0")),
+            ("TOPPADDING", (0, 0), (-1, -1), 2.2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 2.2),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            # Spans for Section Header Row
+            ("SPAN", (0, 1), (2, 1)),
+            ("SPAN", (3, 1), (5, 1)),
+            ("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#EFF6FF")),
+            # Spans for Value Columns
+            ("SPAN", (1, 2), (2, 2)),
+            ("SPAN", (4, 2), (5, 2)),
+            ("SPAN", (1, 3), (2, 3)),
+            ("SPAN", (4, 3), (5, 3)),
+            ("SPAN", (1, 4), (2, 4)),
+            ("SPAN", (4, 4), (5, 4)),
+            ("SPAN", (1, 5), (2, 5)),
+            ("SPAN", (4, 5), (5, 5)),
+        ])
+    )
+    story.append(summary_table)
+    story.append(Spacer(1, 3 * mm))
+
+    # 3. Payment Mode & Channels Summary Table (Full Width: 281 mm)
+    if payment_methods_data:
+        story.append(Paragraph("<b>1. Payment Mode & Collection Channel Split</b>", section_header_style))
+        story.append(Spacer(1, 1.2 * mm))
+
+        pm_headers = ["Payment Mode", "Transactions Count", "Amount Collected (Rs.)", "% Share of Total"]
+        pm_col_widths = [80 * mm, 60 * mm, 75 * mm, 66 * mm]
+
+        pm_data = [[Paragraph(h, header_cell_style) for h in pm_headers]]
+        for pm in payment_methods_data:
+            pm_data.append([
+                Paragraph(str(pm.get("method", "-")), cell_style_left),
+                Paragraph(str(pm.get("count", 0)), cell_style),
+                Paragraph(f"Rs. {int(pm.get('amount', 0)):,}", cell_style),
+                Paragraph(f"{pm.get('share_pct', 0):.1f}%", cell_style),
+            ])
+
+        pm_table = Table(pm_data, colWidths=pm_col_widths, repeatRows=1)
+        pm_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#334155")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ])
+        )
+        story.append(pm_table)
+        story.append(Spacer(1, 3.5 * mm))
+
+    # 4. Batch-Wise Performance Table (Full Width: 281 mm)
+    if batches_data:
+        story.append(Paragraph("<b>2. Batch-Wise Financial & Collection Performance</b>", section_header_style))
+        story.append(Spacer(1, 1.2 * mm))
+
+        b_headers = [
+            "Batch Name",
+            "Location",
+            "Students",
+            "Monthly Fee",
+            "Expected (Rs.)",
+            "Collected (Rs.)",
+            "Pending (Rs.)",
+            "Recovery %",
+            "Paid / Total",
+        ]
+        b_col_widths = [
+            46 * mm,
+            38 * mm,
+            18 * mm,
+            24 * mm,
+            38 * mm,
+            38 * mm,
+            38 * mm,
+            21 * mm,
+            20 * mm,
+        ]
+
+        b_data = [[Paragraph(h, header_cell_style) for h in b_headers]]
+        for b in batches_data:
+            rec_pct = b.get("recovery_pct", 0)
+            b_data.append([
+                Paragraph(str(b.get("batch_name", "-")), cell_style_left),
+                Paragraph(str(b.get("location", "-")), cell_style_left),
+                Paragraph(str(b.get("students", 0)), cell_style),
+                Paragraph(f"Rs. {b.get('monthly_fee', 0):,}", cell_style),
+                Paragraph(f"Rs. {b.get('expected', 0):,}", cell_style),
+                Paragraph(f"<font color='#047857'><b>Rs. {b.get('collected', 0):,}</b></font>", cell_style),
+                Paragraph(f"<font color='#B91C1C'><b>Rs. {b.get('pending', 0):,}</b></font>" if b.get('pending', 0) > 0 else "Rs. 0", cell_style),
+                Paragraph(f"<b>{rec_pct:.1f}%</b>", cell_style),
+                Paragraph(str(b.get("paid_vs_total", "-")), cell_style),
+            ])
+
+        b_table = Table(b_data, colWidths=b_col_widths, repeatRows=1)
+        b_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ])
+        )
+        story.append(b_table)
+        story.append(Spacer(1, 3.5 * mm))
+
+    # 5. Student Fee Dues & Status Table (Full Width: 281 mm)
+    if students_data:
+        story.append(Paragraph("<b>3. Student Fee Status & Dues Breakdown</b>", section_header_style))
+        story.append(Spacer(1, 1.2 * mm))
+
+        s_headers = [
+            "ID",
+            "Student Name",
+            "Batch",
+            "Phone",
+            "Monthly<br/>Fee",
+            "Fee Status",
+            "Paid<br/>Amt",
+            "Pending",
+            "Paid Date",
+            "Method",
+            "Months<br/>(Paid/Due)",
+            "Months<br/>Overdue",
+            "Total<br/>Pending",
+            "Last Paid<br/>Amt",
+            "Last Paid<br/>Month",
+        ]
+        s_col_widths = [
+            8 * mm,
+            30 * mm,
+            26 * mm,
+            22 * mm,
+            16 * mm,
+            17 * mm,
+            16 * mm,
+            16 * mm,
+            22 * mm,
+            16 * mm,
+            20 * mm,
+            16 * mm,
+            22 * mm,
+            17 * mm,
+            23 * mm,
+        ]
+
+        s_data = [[Paragraph(h, header_cell_style) for h in s_headers]]
+        for s in students_data:
+            f_status = str(s.get("fee_status", "UNPAID")).upper()
+            if f_status == "PAID":
+                st_color = "#047857"
+            elif f_status in ("OVERDUE", "UNPAID"):
+                st_color = "#B91C1C"
+            elif f_status == "DUE TODAY":
+                st_color = "#D97706"
+            else:
+                st_color = "#475569"
+
+            st_para = Paragraph(f"<font color='{st_color}'><b>{f_status}</b></font>", cell_style)
+            paid_due_str = f"<b>{s.get('months_paid_count', 0)}</b>/{s.get('total_due_months', 0)}"
+            overdue_m = s.get("unpaid_months_count", 0)
+            overdue_para = Paragraph(f"<font color='#B91C1C'><b>{overdue_m}</b></font>" if overdue_m > 0 else "<font color='#047857'>0</font>", cell_style)
+
+            tot_p = int(s.get("total_pending_amount", 0))
+            tot_p_para = Paragraph(f"<font color='#B91C1C'><b>Rs. {tot_p:,}</b></font>" if tot_p > 0 else "Rs. 0", cell_style)
+
+            m_paid = int(s.get("paid_amount", 0))
+            m_pend = int(s.get("pending_amount", 0))
+            lp_amt = int(s.get("last_paid_amount", 0))
+
+            s_data.append([
+                Paragraph(str(s.get("id", "")), cell_style),
+                Paragraph(str(s.get("name", "") or "-"), cell_style_left),
+                Paragraph(str(s.get("batch_name", "") or "-"), cell_style_left),
+                Paragraph(str(s.get("phone", "") or "-"), cell_style),
+                Paragraph(str(s.get("monthly_fee", 0)), cell_style),
+                st_para,
+                Paragraph(f"Rs. {m_paid:,}" if m_paid > 0 else "-", cell_style),
+                Paragraph(f"Rs. {m_pend:,}" if m_pend > 0 else "0", cell_style),
+                Paragraph(str(s.get("paid_date", "") or "-"), cell_style),
+                Paragraph(str(s.get("payment_method", "") or "-"), cell_style),
+                Paragraph(paid_due_str, cell_style),
+                overdue_para,
+                tot_p_para,
+                Paragraph(f"Rs. {lp_amt:,}" if lp_amt > 0 else "-", cell_style),
+                Paragraph(str(s.get("last_paid_month", "") or "-"), cell_style),
+            ])
+
+        s_table = Table(s_data, colWidths=s_col_widths, repeatRows=1)
+        s_table.setStyle(
+            TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("GRID", (0, 0), (-1, -1), 0.3, colors.HexColor("#CBD5E1")),
+                ("TOPPADDING", (0, 0), (-1, -1), 1.8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 1.8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 1.5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 1.5),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+            ])
+        )
+        story.append(s_table)
+
     document.build(story)
     output.seek(0)
     return output
@@ -3578,4 +4043,429 @@ def export_single_student_report(
         format,
         f"student-{student.id}-{clean_name}-report",
         f"Student Report - {student.full_name}",
+    )
+
+
+# =========================================================
+# 6. FEE OVERVIEW EXPORT
+# =========================================================
+
+
+@router.get(
+    "/fees/overview/export"
+)
+def export_fee_overview_report(
+    month: int | None = Query(
+        default=None,
+        ge=1,
+        le=12,
+        description="Target fee month (1-12, defaults to current month)",
+    ),
+
+    year: int | None = Query(
+        default=None,
+        description="Target fee year (defaults to current year)",
+    ),
+
+    batch_id: int | None = Query(
+        default=None,
+        gt=0,
+        description="Filter by batch ID",
+    ),
+
+    fee_status: str | None = Query(
+        default=None,
+        description="Filter by fee status: paid | overdue | due_today | unpaid | all",
+    ),
+
+    payment_method: str | None = Query(
+        default=None,
+        description="Filter by payment method: upi | cash | card | all",
+    ),
+
+    format: str = Query(
+        default="xlsx",
+        pattern="^(xlsx|pdf|csv)$",
+        description="Export format: xlsx | pdf | csv",
+    ),
+
+    db: Session = Depends(get_db),
+
+    current_admin: Admin = Depends(
+        get_current_admin
+    ),
+):
+    today = date.today()
+    target_month = month or today.month
+    target_year = year or today.year
+    target_month_label = f"{month_name(target_month)} {target_year}"
+
+    # Determine fee status filter
+    effective_fee_status = (fee_status or "").strip().lower().replace(" ", "_")
+    if effective_fee_status in ("all", ""):
+        effective_fee_status = None
+
+    # Determine payment method filter
+    effective_pm_filter = (payment_method or "").strip().lower()
+    if effective_pm_filter in ("all", ""):
+        effective_pm_filter = None
+
+    # 1. Batches Query
+    batch_query = db.query(Batch).filter(Batch.is_active.is_(True))
+    if batch_id:
+        batch_query = batch_query.filter(Batch.id == batch_id)
+    batches = batch_query.order_by(Batch.batch_name.asc()).all()
+    batch_dict = {b.id: b for b in batches}
+
+    # 2. Students Query
+    student_query = (
+        db.query(Student, Batch)
+        .join(Batch, Student.batch_id == Batch.id)
+        .filter(Student.is_active.is_(True), Batch.is_active.is_(True))
+    )
+    if batch_id:
+        student_query = student_query.filter(Student.batch_id == batch_id)
+    students = student_query.order_by(Batch.batch_name.asc(), Student.full_name.asc()).all()
+
+    # 3. Monthly Fee Payments Query (for target month & year)
+    payment_query = (
+        db.query(FeePayment, Student, Batch)
+        .join(Student, FeePayment.student_id == Student.id)
+        .join(Batch, Student.batch_id == Batch.id)
+        .filter(
+            FeePayment.fee_month == target_month,
+            FeePayment.fee_year == target_year,
+            Student.is_active.is_(True),
+            Batch.is_active.is_(True),
+        )
+    )
+    if batch_id:
+        payment_query = payment_query.filter(Student.batch_id == batch_id)
+    if effective_pm_filter:
+        payment_query = payment_query.filter(func.lower(FeePayment.payment_method) == effective_pm_filter)
+    month_payments = payment_query.order_by(FeePayment.payment_date.desc()).all()
+
+    # 4. Compute Student Dues & Lifecycle Stats
+    student_rows = []
+    paid_count = 0
+    overdue_count = 0
+    due_today_count = 0
+    unpaid_count = 0
+    total_expected_revenue = 0
+    total_collected_revenue = 0
+    total_pending_dues = 0
+
+    for student, b_obj in students:
+        # Fetch all payments for lifecycle fee calculation
+        student_all_payments = (
+            db.query(FeePayment)
+            .filter(FeePayment.student_id == student.id)
+            .order_by(FeePayment.payment_date.desc(), FeePayment.id.desc())
+            .all()
+        )
+
+        lifecycle = calculate_student_lifecycle_fee(
+            student=student,
+            batch=b_obj,
+            target_year=target_year,
+            target_month=target_month,
+            all_payments=student_all_payments,
+            today=today,
+        )
+
+        st_status = lifecycle["fee_status"]
+        monthly_fee = lifecycle["monthly_fee"]
+        t_paid = lifecycle["target_paid_amount"]
+        t_pending = lifecycle["target_pending_amount"]
+        t_paid_date = lifecycle["target_paid_date"]
+        t_method = lifecycle["target_payment_method"]
+
+        total_expected_revenue += monthly_fee
+        total_collected_revenue += t_paid
+        total_pending_dues += t_pending
+
+        if st_status == "PAID":
+            paid_count += 1
+        elif st_status == "OVERDUE":
+            overdue_count += 1
+        elif st_status == "DUE TODAY":
+            due_today_count += 1
+        else:
+            unpaid_count += 1
+
+        # Check filters
+        if effective_fee_status:
+            if effective_fee_status == "paid" and st_status != "PAID":
+                continue
+            elif effective_fee_status == "overdue" and st_status != "OVERDUE":
+                continue
+            elif effective_fee_status == "due_today" and st_status != "DUE TODAY":
+                continue
+            elif effective_fee_status == "unpaid" and st_status not in ("OVERDUE", "DUE TODAY", "UNPAID"):
+                continue
+
+        if effective_pm_filter:
+            if t_method.lower() != effective_pm_filter:
+                continue
+
+        s_item = {
+            "id": student.id,
+            "name": student.full_name,
+            "batch_name": b_obj.batch_name,
+            "phone": student.phone_number or "-",
+            "parent_name": student.parent_name or "-",
+            "monthly_fee": monthly_fee,
+            "fee_status": st_status,
+            "paid_amount": t_paid,
+            "pending_amount": t_pending,
+            "paid_date": t_paid_date,
+            "payment_method": t_method,
+            "total_due_months": lifecycle["total_due_months"],
+            "months_paid_count": lifecycle["months_paid_count"],
+            "unpaid_months_count": lifecycle["unpaid_months_count"],
+            "total_pending_amount": lifecycle["total_pending_amount"],
+            "last_paid_amount": lifecycle["last_paid_amount"],
+            "last_paid_month": lifecycle["last_paid_month"],
+        }
+        student_rows.append(s_item)
+
+    total_students_count = len(students)
+    collection_rate = (
+        round((total_collected_revenue / total_expected_revenue) * 100, 2)
+        if total_expected_revenue > 0
+        else 0
+    )
+
+    # 5. Compute Batch-Level Performance
+    batch_rows = []
+    for b_id, b_obj in batch_dict.items():
+        b_stu_list = [s for s, _ in students if s.batch_id == b_id]
+        b_count = len(b_stu_list)
+        b_m_fee = int(b_obj.monthly_fee or 0)
+        b_expected = sum(
+            int(s.monthly_fee if (s.monthly_fee is not None and s.monthly_fee > 0) else b_m_fee)
+            for s in b_stu_list
+        )
+
+        b_paid_sum = (
+            db.query(func.coalesce(func.sum(FeePayment.net_payable), 0))
+            .join(Student, FeePayment.student_id == Student.id)
+            .filter(
+                Student.batch_id == b_id,
+                FeePayment.fee_month == target_month,
+                FeePayment.fee_year == target_year,
+                Student.is_active.is_(True),
+            )
+            .scalar()
+            or 0
+        )
+        b_collected = int(b_paid_sum)
+        b_pending = max(0, b_expected - b_collected)
+        b_recovery = round((b_collected / b_expected) * 100, 2) if b_expected > 0 else 0
+
+        # Paid students in batch for target month
+        b_paid_students_count = (
+            db.query(func.count(func.distinct(FeePayment.student_id)))
+            .join(Student, FeePayment.student_id == Student.id)
+            .filter(
+                Student.batch_id == b_id,
+                FeePayment.fee_month == target_month,
+                FeePayment.fee_year == target_year,
+                Student.is_active.is_(True),
+            )
+            .scalar()
+            or 0
+        )
+
+        batch_rows.append({
+            "batch_name": b_obj.batch_name,
+            "location": b_obj.location or "-",
+            "students": b_count,
+            "monthly_fee": b_m_fee,
+            "expected": b_expected,
+            "collected": b_collected,
+            "pending": b_pending,
+            "recovery_pct": b_recovery,
+            "paid_vs_total": f"{b_paid_students_count} / {b_count}",
+        })
+
+    # 6. Compute Payment Methods Split
+    pm_stats = {}
+    for p_item, s_item, b_item in month_payments:
+        pm_name = str(p_item.payment_method or "Other").strip().upper()
+        amt = int(p_item.net_payable or 0)
+        if pm_name not in pm_stats:
+            pm_stats[pm_name] = {"count": 0, "amount": 0}
+        pm_stats[pm_name]["count"] += 1
+        pm_stats[pm_name]["amount"] += amt
+
+    payment_methods_data = []
+    for pm_name, pm_info in pm_stats.items():
+        pm_share = (
+            round((pm_info["amount"] / total_collected_revenue) * 100, 2)
+            if total_collected_revenue > 0
+            else 0
+        )
+        payment_methods_data.append({
+            "method": pm_name,
+            "count": pm_info["count"],
+            "amount": pm_info["amount"],
+            "share_pct": pm_share,
+        })
+    payment_methods_data.sort(key=lambda x: x["amount"], reverse=True)
+
+    # 7. Payment Transactions Log
+    transaction_rows = []
+    for p_item, s_item, b_item in month_payments:
+        transaction_rows.append({
+            "Payment ID": p_item.id,
+            "Payment Date": format_date(p_item.payment_date),
+            "Student ID": s_item.id,
+            "Student Name": s_item.full_name,
+            "Batch Name": b_item.batch_name,
+            "Fee Month": month_name(p_item.fee_month),
+            "Fee Year": p_item.fee_year,
+            "Amount": int(p_item.net_payable or 0),
+            "Payment Method": str(p_item.payment_method),
+            "Status": "PAID",
+        })
+
+    kpi_dict = {
+        "total_expected_revenue": total_expected_revenue,
+        "total_collected_revenue": total_collected_revenue,
+        "total_pending_dues": total_pending_dues,
+        "collection_rate": collection_rate,
+        "total_students_count": total_students_count,
+        "paid_students_count": paid_count,
+        "overdue_students_count": overdue_count,
+        "due_today_students_count": due_today_count,
+        "unpaid_students_count": unpaid_count,
+    }
+
+    batch_filter_label = batch_dict[batch_id].batch_name if (batch_id and batch_id in batch_dict) else None
+
+    # -------------------------------------------------
+    # PDF EXPORT
+    # -------------------------------------------------
+    if format == "pdf":
+        pdf_stream = create_fee_overview_pdf(
+            month_label=target_month_label,
+            kpi_data=kpi_dict,
+            payment_methods_data=payment_methods_data,
+            batches_data=batch_rows,
+            students_data=student_rows,
+            batch_filter_name=batch_filter_label,
+            fee_status_filter=effective_fee_status,
+            payment_method_filter=effective_pm_filter,
+        )
+        return StreamingResponse(
+            pdf_stream,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="fee-overview-report-{target_month}-{target_year}.pdf"'
+            },
+        )
+
+    # -------------------------------------------------
+    # EXCEL / CSV DATASETS
+    # -------------------------------------------------
+    overview_summary_rows = [
+        {
+            "Metric": "Target Month",
+            "Value": target_month_label,
+        },
+        {
+            "Metric": "Total Expected Revenue",
+            "Value": total_expected_revenue,
+        },
+        {
+            "Metric": "Total Collected Revenue",
+            "Value": total_collected_revenue,
+        },
+        {
+            "Metric": "Total Pending Dues",
+            "Value": total_pending_dues,
+        },
+        {
+            "Metric": "Collection Recovery Rate (%)",
+            "Value": f"{collection_rate:.1f}%",
+        },
+        {
+            "Metric": "Total Active Students",
+            "Value": total_students_count,
+        },
+        {
+            "Metric": "Paid Students Count",
+            "Value": paid_count,
+        },
+        {
+            "Metric": "Overdue Students Count",
+            "Value": overdue_count,
+        },
+        {
+            "Metric": "Due Today / Unpaid Count",
+            "Value": due_today_count + unpaid_count,
+        },
+    ]
+
+    excel_batch_rows = [
+        {
+            "Batch Name": b["batch_name"],
+            "Location": b["location"],
+            "Students": b["students"],
+            "Monthly Fee": b["monthly_fee"],
+            "Expected Revenue": b["expected"],
+            "Collected Revenue": b["collected"],
+            "Pending Dues": b["pending"],
+            "Recovery %": f"{b['recovery_pct']:.1f}%",
+            "Paid / Total Students": b["paid_vs_total"],
+        }
+        for b in batch_rows
+    ]
+
+    excel_student_rows = [
+        {
+            "ID": s["id"],
+            "Student Name": s["name"],
+            "Batch Name": s["batch_name"],
+            "Phone": s["phone"],
+            "Parent Name": s["parent_name"],
+            "Monthly Fee": s["monthly_fee"],
+            "Target Month Status": s["fee_status"],
+            "Paid Amount": s["paid_amount"],
+            "Pending Amount": s["pending_amount"],
+            "Paid Date": s["paid_date"],
+            "Payment Method": s["payment_method"],
+            "Months (Paid/Due)": f"{s['months_paid_count']}/{s['total_due_months']}",
+            "Months Overdue": s["unpaid_months_count"],
+            "Total Pending Balance": s["total_pending_amount"],
+            "Last Paid Amount": s["last_paid_amount"],
+            "Last Paid Month": s["last_paid_month"],
+        }
+        for s in student_rows
+    ]
+
+    excel_pm_rows = [
+        {
+            "Payment Method": pm["method"],
+            "Transactions Count": pm["count"],
+            "Amount Collected": pm["amount"],
+            "% Share of Total": f"{pm['share_pct']:.1f}%",
+        }
+        for pm in payment_methods_data
+    ]
+
+    sheets = {
+        "Executive Overview": overview_summary_rows,
+        "Batch Performance": excel_batch_rows,
+        "Student Fee Dues": excel_student_rows,
+        "Payment Mode Summary": excel_pm_rows,
+        "Transactions Log": transaction_rows,
+    }
+
+    return export_response(
+        sheets,
+        format,
+        f"fee-overview-report-{target_month}-{target_year}",
+        f"Fee Overview Report - {target_month_label}",
     )

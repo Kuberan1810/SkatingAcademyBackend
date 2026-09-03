@@ -15,24 +15,24 @@ class ImportStudentRecord(BaseModel):
     )
 
     # =====================================================
-    # REQUIRED
+    # REQUIRED (Only Name, DOB, Phone are mandatory)
     # =====================================================
 
     full_name: str
 
     dob: date
 
-    gender: str
-
-    parent_name: str
-
     phone_number: str
-
-    monthly_fee: int
 
     # =====================================================
     # OPTIONAL
     # =====================================================
+
+    gender: str | None = None
+
+    parent_name: str | None = None
+
+    monthly_fee: int | None = None
 
     blood_group: str | None = None
 

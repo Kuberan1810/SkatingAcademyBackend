@@ -29,28 +29,28 @@ class StudentCreate(BaseModel):
 
     dob: date
 
-    gender: str
-
-    blood_group: str | None = None
-
-    batch_id: int = Field(
-        gt=0,
-    )
-
-    join_date: date
-
-    parent_name: str = Field(
-        min_length=2,
-        max_length=150,
-    )
-
     phone_number: str = Field(
         min_length=10,
         max_length=20,
     )
 
-    emergency_contact: str = Field(
-        min_length=10,
+    batch_id: int = Field(
+        gt=0,
+    )
+
+    gender: str | None = None
+
+    blood_group: str | None = None
+
+    join_date: date | None = None
+
+    parent_name: str | None = Field(
+        default=None,
+        max_length=150,
+    )
+
+    emergency_contact: str | None = Field(
+        default=None,
         max_length=20,
     )
 
@@ -59,8 +59,6 @@ class StudentCreate(BaseModel):
         ge=0,
     )
 
-
-
     avatar_uri: str | None = Field(
         default=None,
         max_length=500,
@@ -68,7 +66,9 @@ class StudentCreate(BaseModel):
 
     @field_validator("gender")
     @classmethod
-    def validate_gender(cls, value: str) -> str:
+    def validate_gender(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
         if value not in VALID_GENDERS:
             raise ValueError(
                 f"Invalid gender. Choose from: "
